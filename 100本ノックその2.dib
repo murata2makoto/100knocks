@@ -1,0 +1,555 @@
+#!markdown
+
+まず関連するライブラリを読み込む。
+
+#!fsharp
+
+#r "nuget:Deedle,2.5.0"
+#r "nuget:Deedle.Math,2.5.0"
+#r "nuget:FSharp.Charting,2.1.0"
+#i "nuget:https://www.myget.org/F/gregs-experimental-packages/api/v3/index.json"
+#r "nuget:Deedle.DotNet.Interactive.Extension,0.1.0-alpha8"
+open System
+open Deedle
+open Deedle.Frame
+open Deedle.Math
+open MathNet.Numerics.Statistics
+open Deedle.``F# Frame extensions``
+open System.Text.RegularExpressions
+open System.Linq
+open System.Collections.Generic
+
+#!markdown
+
+ファイルの読み込み
+
+#!fsharp
+
+let df_receipt = Frame.ReadCsv ("n:/home/makoto/100knocks-preprocess/docker/work/data/receipt.csv", true, true)
+let df_store = Frame.ReadCsv ("n:/home/makoto/100knocks-preprocess/docker/work/data/store.csv", true, true)
+let df_customer = Frame.ReadCsv ("n:/home/makoto/100knocks-preprocess/docker/work/data/customer.csv", true, true)
+let df_product = Frame.ReadCsv ("n:/home/makoto/100knocks-preprocess/docker/work/data/product.csv", true, true)
+let df_category = Frame.ReadCsv ("n:/home/makoto/100knocks-preprocess/docker/work/data/category.csv", true, true)
+let df_geocode = Frame.ReadCsv ("n:/home/makoto/100knocks-preprocess/docker/work/data/geocode.csv", true, true)
+
+#!markdown
+
+P-21
+
+レシート明細テーブル（receipt）に対し、件数をカウントせよ
+
+#!fsharp
+
+df_receipt.RowCount
+
+#!markdown
+
+P-22
+
+レシート明細テーブル（receipt）の顧客ID（customer_id）に対し、ユニーク件数をカウントせよ。
+
+#!fsharp
+
+(df_receipt |>  sliceCols(["customer_id"])).UniqueCount()
+
+#!markdown
+
+P-23
+
+レシート明細テーブル（receipt）に対し、店舗コード（store_cd）ごとに売上金額（amount）と売上数量（quantity）を合計せよ。
+
+#!fsharp
+
+df_receipt 
+|> aggregateRowsBy ["store_cd"] ["amount"; "quantity"] Stats.sum
+|> sortRows "store_cd"
+|> indexRowsOrdinally 
+
+#!markdown
+
+P-24
+
+レシート明細データフレーム（df_receipt）に対し、顧客ID（customer_id）ごとに最も新しい売上日（sales_ymd）を求め、10件表示せよ。
+
+#!fsharp
+
+df_receipt 
+|> sliceCols ["sales_ymd";  "customer_id"] 
+|> groupRowsByString "customer_id"
+|> applyLevel fst Stats.max 
+|> sortRowsByKey 
+|> take 10
+
+#!fsharp
+
+df_receipt 
+|> sliceCols ["sales_ymd";  "customer_id"] 
+|> aggregateRowsBy ["customer_id"] ["sales_ymd"]  Stats.max //groupとapplyLevelの両方を一挙にやってくれる
+|> sortRows "customer_id" 
+|> take 10
+
+#!markdown
+
+P-25
+
+レシート明細データフレーム（df_receipt）に対し、顧客ID（customer_id）ごとに最も古い売上日（sales_ymd）を求め、10件表示せよ。。
+
+#!fsharp
+
+df_receipt 
+|> sliceCols ["sales_ymd";  "customer_id"] 
+|> groupRowsByString "customer_id"
+|> applyLevel fst Stats.min 
+|> sortRowsByKey 
+|> take 10
+
+#!fsharp
+
+df_receipt 
+|> sliceCols ["sales_ymd";  "customer_id"] 
+|> aggregateRowsBy ["customer_id"] ["sales_ymd"] Stats.min 
+|> sortRows "customer_id"
+|> take 10
+
+#!markdown
+
+P-26
+
+レシート明細テーブル（receipt）に対し、顧客ID（customer_id）ごとに最も新しい売上日（sales_ymd）と古い売上日を求め、両者が異なるデータを10件表示せよ
+
+#!fsharp
+
+df_receipt
+|> sliceCols ["customer_id"; "sales_ymd"]
+|> aggregateRowsBy ["customer_id"] ["sales_ymd"] (fun srs -> Stats.max srs, Stats.min srs)
+|> expandCols ["sales_ymd"]
+|> mapColKeys (fun colName -> if colName.EndsWith("Item1") then "sales_ymd_max" 
+                              elif colName.EndsWith("Item2") then "sales_ymd_min"
+                              else colName )
+|> filterRowValues (fun os -> os.GetAs<int>("sales_ymd_max") <> os.GetAs<int>("sales_ymd_min"))
+|> sortRows  "customer_id"
+|> take 10
+
+#!markdown
+
+P-27
+
+レシート明細テーブル（receipt）に対し、店舗コード（store_cd）ごとに売上金額（amount）の平均を計算し、降順でTOP5を表示せよ。
+
+#!fsharp
+
+df_receipt 
+|> aggregateRowsBy ["store_cd"] ["amount"] Stats.mean
+|> sortRowsBy "amount" (fun (x: float) -> - x)
+|> take 5
+
+#!markdown
+
+P-28
+
+レシート明細テーブル（receipt）に対し、店舗コード（store_cd）ごとに売上金額（amount）の中央値を計算し、降順でTOP5を表示せよ
+
+#!fsharp
+
+df_receipt 
+|> aggregateRowsBy ["store_cd"] ["amount"] Stats.median
+|> sortRowsBy "amount" (fun (x: float) -> - x)
+|> take 5
+
+#!markdown
+
+P-29
+
+レシート明細テーブル（receipt）に対し、店舗コード（store_cd）ごとに商品コードの最頻値を求めよ。
+
+#!fsharp
+
+//Deedle does not provide a function for computing the mode of a series
+
+let getMode (srs : Series<'R,'V>) = 
+    let dict = new System.Collections.Generic.Dictionary<'V, int>()
+    srs 
+    |> Series.mapValues (fun v -> 
+                            match dict.TryGetValue(v) with 
+                            | true, i -> dict.[v] <- i + 1
+                            | false, _ -> dict.[v] <- 1)
+    |> ignore
+    let mutable maxCount = 0
+    let mutable modes = []
+    for kvp in dict do
+        if kvp.Value > maxCount then
+            maxCount <- kvp.Value
+            modes <- [kvp.Key]
+        elif kvp.Value = maxCount then
+            modes <- kvp.Key::modes
+        else ()
+    modes |> List.rev
+
+df_receipt  
+|> aggregateRowsBy ["store_cd"] ["product_cd"] getMode   
+|> sortRows "store_cd"
+|> indexRowsOrdinally
+
+#!markdown
+
+P-30
+
+レシート明細テーブル（receipt）に対し、店舗コード（store_cd）ごとに売上金額（amount）の標本分散を計算し、降順にTOP5を表示せよ。
+
+#!markdown
+
+注: Stats.varianceは不変分散を計算するので、n-1を掛けてからnで割れば標本分散になる。平均からのずれの二乗和をnで割ると標本分散、n-1で割ると不変分散。
+
+#!fsharp
+
+df_receipt 
+|> aggregateRowsBy ["store_cd"] ["amount"] (fun x -> (float x.KeyCount - 1.0) * Stats.variance x / float x.KeyCount )
+|> sortRowsBy "amount" (fun (x: float) -> - x)
+|> take 5
+
+#!markdown
+
+P-31
+
+レシート明細データフレーム（df_receipt）に対し、店舗コード（store_cd）ごとに売上金額（amount）の標本標準偏差を計算し、降順でTOP5を表示せよ。
+
+#!markdown
+
+注: 標本標準偏差は標本分散の平方根を計算すればよい
+
+#!fsharp
+
+df_receipt 
+|> aggregateRowsBy ["store_cd"] ["amount"]  (fun x -> ((float x.KeyCount - 1.0) * Stats.variance x / float x.KeyCount) |> sqrt ) 
+|> sortRowsBy "amount" (fun (x: float) -> - x)
+|> take 5
+
+//Stats.stdDev is different!
+
+#!markdown
+
+P=32
+
+レシート明細データフレーム（df_receipt）の売上金額（amount）について、25％刻みでパーセンタイル値を求めよ。
+
+#!markdown
+
+パーセンタイルは、下位n%に入るには何番目までかを表す値。
+
+#!fsharp
+
+[Deedle.Math.Stats.quantile ((df_receipt?amount), 0.25, (QuantileDefinition.Median));
+Deedle.Math.Stats.quantile ((df_receipt?amount), 0.5, (QuantileDefinition.Median));
+Deedle.Math.Stats.quantile ((df_receipt?amount), 0.75, (QuantileDefinition.Median));
+Deedle.Math.Stats.quantile ((df_receipt?amount), 1.0, (QuantileDefinition.Median))]
+
+
+Deedle.Stats.quantile ([|0.0; 0.25; 0.5; 0.75; 1.0|], df_receipt?amount)
+
+#!markdown
+
+P-33
+
+レシート明細データフレーム（df_receipt）に対し、店舗コード（store_cd）ごとに売上金額（amount）の平均を計算し、330以上のものを抽出せよ。
+
+#!fsharp
+
+df_receipt 
+|> aggregateRowsBy ["store_cd"] ["amount"]  Stats.mean
+|> filterRowValues (fun os -> os.GetAs<float>("amount") > 330.0)
+|> sortRows "store_cd"
+
+#!markdown
+
+P-34
+
+レシート明細データフレーム（df_receipt）に対し、顧客ID（customer_id）ごとに売上金額（amount）を合計して全顧客の平均を求めよ。ただし、顧客IDが"Z"から始まるのものは非会員を表すため、除外して計算すること。
+
+#!fsharp
+
+df_receipt
+|> filterRowValues (fun os -> os.GetAs<string>("customer_id").StartsWith("Z") |> not)
+|> aggregateRowsBy ["customer_id"] ["amount"]  Stats.sum
+|> getCol "amount"      
+|> Stats.mean
+
+#!markdown
+
+P-35
+
+レシート明細データフレーム（df_receipt）に対し、顧客ID（customer_id）ごとに売上金額（amount）を合計して全顧客の平均を求め、平均以上に買い物をしている顧客を抽出せよ。ただし、顧客IDが"Z"から始まるのものは非会員を表すため、除外して計算すること。なお、データは10件だけ表示させれば良い。
+
+#!fsharp
+
+df_receipt
+|> filterRowValues
+    (fun os ->
+        os.GetAs<string>("customer_id").StartsWith("Z") |> not)
+|> aggregateRowsBy ["customer_id"] ["amount"] Stats.sum
+|> (fun tempDf -> 
+    let mean = tempDf?amount |>  Stats.mean 
+    tempDf 
+    |> filterRowValues
+        (fun os -> os.GetAs<float>("amount") >  mean))
+|> sortRows "customer_id"
+|> take 10
+
+#!markdown
+
+P-36
+
+レシート明細データフレーム（df_receipt）と店舗データフレーム（df_store）を内部結合し、レシート明細データフレームの全項目と店舗データフレームの店舗名（store_name）を10件表示させよ。
+
+#!markdown
+
+Deedleではmergeが出来ない。joinは出来るがここでは使えない。df_receiptではstore_cdはインデックスに出来ないから。
+
+https://github.com/fslaborg/Deedle/issues/154
+
+ガリガリ書くと次のようになる。これは列に対するseriesを作って追加している。
+
+#!fsharp
+
+let (store_cd2store_name: Series<_,string>) =
+    df_store 
+    |> indexRowsString "store_cd"
+    |> getCol "store_name"
+
+let (store_cd_srs: Series<_,string>)  =
+    (df_receipt |> getCol "store_cd": Series<_,string>)
+    |> Series.mapValues (fun scd ->  store_cd2store_name.[scd])
+
+df_receipt
+|> addCol "store_name" store_cd_srs
+|> filterRowsBy "store_cd" "S14006"
+|> take 10
+
+#!markdown
+
+別解: mergeを用いている。つまり列を追加するのではなくフレームをマージしている。
+
+#!fsharp
+
+//This is slow due to repeated unboxing and boxing.
+let df_store_indexed_by_cd = 
+    df_store 
+    |> Frame.indexRowsString "store_cd"
+
+let df_toBeMerged =
+    df_receipt
+    |> Frame.mapRowValues (fun  os ->
+        let store_cd = os.GetAs<string>("store_cd")
+        if df_store_indexed_by_cd.RowKeys.Contains(store_cd) then
+            let row = df_store_indexed_by_cd.Rows.[store_cd]
+            series ["store_name" => row.GetAs<string>("store_name")]
+        else series []
+        )
+    |> Frame.ofRows
+
+df_toBeMerged
+|> merge df_receipt 
+|> sortRowsBy "store_cd" (fun x -> (string x).Substring(1) |> int |> (fun x -> - x))
+|> filterRowsBy "store_cd" "S14006"
+
+|> take 10
+
+#!markdown
+
+この例のようにforeign keyに基づくjoinをしたいことは多いが、Deedleではいい方法がない。そこで、列一つだけをforeign keyに基づいて追加する汎用関数を作った。以下の関数では、indexed_frameのキーがprimary_frameのkey_columnにあるという前提。追加する列はindexed_frameのcolumn_to_be_copiedを用いて構築する。データ型は型変数で指定する。indexed_frameをキーで参照しても値が見つからないときはmissingValueを用いる。
+
+#!fsharp
+
+//helper function
+
+let mergeColumnFromForeignFrame<'X, 'C, 'R1, 'R2 
+              when 'C: equality and 'R1: equality and 'R2: equality>
+   (column_to_be_copied: 'C) (missingValue: 'X) (indexed_frame: Frame<'R2,'C>)
+   (key_column: 'C) (primary_frame: Frame<'R1,'C>)   =
+
+  let srs_references: Series<'R1, 'R2> = 
+      primary_frame |> getCol key_column
+
+  let (srs_cols_to_be_merged: Series<_,'X>) = 
+    getCol column_to_be_copied indexed_frame
+
+  let new_srs = 
+    srs_references 
+    |> Series.mapValues 
+        (fun x -> if srs_cols_to_be_merged.ContainsKey(x) then
+                    srs_cols_to_be_merged.[x]
+                  else missingValue )
+
+  addCol column_to_be_copied new_srs primary_frame
+  
+
+#!markdown
+
+mergeColumnFromForeignFrameを使えば短く書ける。
+
+#!fsharp
+
+//Final solution
+let df_indexed_store =  df_store |> Frame.indexRowsString "store_cd" in 
+df_receipt
+|> mergeColumnFromForeignFrame<string,_,_,_>  "store_name" "" df_indexed_store "store_cd" 
+|> filterRowsBy "store_cd" "S14006"
+|> take 10
+
+#!markdown
+
+P-37
+
+商品データフレーム（df_product）とカテゴリデータフレーム（df_category）を内部結合
+し、商品データフレームの全項目とカテゴリデータフレームの小区分名
+（category_small_name）を10件表示させよ。
+
+#!markdown
+
+まず、列を追加するプログラムをガリガリ書いてみる。
+
+#!fsharp
+
+let (ctegory2small_name: Series<_,string>) =
+    df_category
+    |> groupRowsByInt "category_small_cd"
+    |> mapRowKeys fst
+    |> getCol "category_small_name"
+
+
+let small_name_srs =
+    df_product 
+    |> Frame.rows
+    |> Series.mapValues
+        (fun rs ->
+                let small = rs.GetAs<int>("category_small_cd")
+                ctegory2small_name.[small])
+
+df_product 
+|> addCol "category_small_name" small_name_srs
+
+#!markdown
+
+mergeColumnFromForeignFrameを使うとずっと楽になる。
+
+#!fsharp
+
+//final solution
+
+let df_indexed_category =  df_category |> Frame.indexRowsString "category_small_cd" in df_product
+|> mergeColumnFromForeignFrame<string,_,_,_>  "category_small_name" "" df_indexed_category "category_small_cd" 
+
+#!markdown
+
+P-38
+
+顧客データフレーム（df_customer）とレシート明細データフレーム（df_receipt）から、各顧客ごとの売上金額合計を求めよ。ただし、買い物の実績がない顧客については売上金額を0として表示させること。また、顧客は性別コード（gender_cd）が女性（1）であるものを対象とし、非会員（顧客IDが'Z'から始まるもの）は除外すること。なお、結果は10件だけ表示させれば良い。
+
+#!markdown
+
+まずガリガリ書いてみる
+
+#!fsharp
+
+let (df_member_receipt: Series<_,double>) =
+    df_receipt
+    |> filterRowValues (fun os -> 
+                            let customer_id = os.GetAs<string> "customer_id"
+                            not(customer_id.StartsWith("Z")))
+    |> aggregateRowsBy ["customer_id"] ["amount"] Stats.sum 
+    |> indexRowsString "customer_id"
+    |> Frame.getCol "amount"
+
+let df_female_customer =
+    df_customer
+    |> filterRowsBy "gender_cd" 1
+    |> sliceCols ["customer_id"]
+
+let srs_amount =
+    df_female_customer
+    |> getCol "customer_id" 
+    |> Series.mapValues 
+        (fun v -> match Series.tryGet v df_member_receipt with
+                  | None -> 0.0 
+                  | Some(vv) -> vv)
+
+let result = 
+    df_female_customer
+    |> addCol "amount" srs_amount
+
+result
+
+#!markdown
+
+mergeColumnFromForeignFrameを使うとずっと楽になる。
+
+#!fsharp
+
+let df_member_receipt =
+    df_receipt
+    |> filterRowValues (fun os -> 
+                            let customer_id = os.GetAs<string> "customer_id"
+                            not(customer_id.StartsWith("Z")))
+    |> aggregateRowsBy ["customer_id"] ["amount"] Stats.sum 
+    |> indexRowsString "customer_id"
+
+df_customer
+|> filterRowsBy "gender_cd" 1
+|> sliceCols ["customer_id"]
+|> mergeColumnFromForeignFrame<float,_,_,_>  "amount" 0.0 df_member_receipt "customer_id" 
+
+#!markdown
+
+P-39
+
+レシート明細データフレーム（df_receipt）から売上日数の多い顧客の上位20件と、売上金額合計の多い顧客の上位20件を抽出し、完全外部結合せよ。ただし、非会員（顧客IDが'Z'から始まるもの）は除外すること。
+
+#!fsharp
+
+let df_customer_only_receipt =
+    df_receipt
+    |> filterRowValues (fun os -> (os.GetAs<string> "customer_id").StartsWith("ZZ") |> not)
+
+(
+df_customer_only_receipt
+|> sliceCols ["customer_id"; "amount"]
+|> groupRowsByString "customer_id"
+|> applyLevel fst Stats.sum
+|> sortRowsBy "amount" (fun x -> -x)
+|> take 20
+,
+df_customer_only_receipt
+|> sliceCols ["customer_id"; "sales_ymd"]
+|> groupRowsByString "customer_id"
+|> applyLevel fst Stats.uniqueCount
+|> sortRowsBy "sales_ymd" (fun x -> -x)
+|> take 20
+)
+||>  Frame.join JoinKind.Outer
+|> sortRowsByKey
+
+#!markdown
+
+P-040
+
+全ての店舗と全ての商品を組み合わせると何件のデータとなるか調査したい。店舗（df_store）と商品（df_product）を直積した件数を計算せよ。
+
+#!markdown
+
+件数を数えるだけならこれでもいい
+
+#!fsharp
+
+(df_store |> countRows) * (df_product|> countRows)
+
+#!markdown
+
+ちゃんとフレームを作るならこうする。両側からObjectSeriesを一つずつ選んでmergeしてすべての行seriesを作る。そこからフレームを作る
+
+#!fsharp
+
+seq {for s in df_store.Rows.Values do
+        for p in df_product.Rows.Values do
+          yield Series.merge s p}
+|> Series.ofValues 
+|> Frame.ofRows 
+|> Frame.countRows

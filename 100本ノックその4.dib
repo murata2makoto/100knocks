@@ -1,0 +1,610 @@
+#!markdown
+
+まず関連するライブラリを読み込む。
+
+#!fsharp
+
+#r "nuget:Deedle,2.5.0"
+#r "nuget:Deedle.Math,2.5.0"
+#r "nuget:FSharp.Charting,2.1.0"
+#i "nuget:https://www.myget.org/F/gregs-experimental-packages/api/v3/index.json"
+#r "nuget:Deedle.DotNet.Interactive.Extension,0.1.0-alpha8"
+open System
+open Deedle
+open Deedle.Frame
+open Deedle.Math
+open MathNet.Numerics.Statistics
+open Deedle.``F# Frame extensions``
+open System.Text.RegularExpressions
+open System.Linq
+open System.Collections.Generic
+
+#!markdown
+
+ファイルの読み込み
+
+#!fsharp
+
+let df_receipt = Frame.ReadCsv ("n:/home/makoto/100knocks-preprocess/docker/work/data/receipt.csv", true, true)
+let df_store = Frame.ReadCsv ("n:/home/makoto/100knocks-preprocess/docker/work/data/store.csv", true, true)
+let df_customer = Frame.ReadCsv ("n:/home/makoto/100knocks-preprocess/docker/work/data/customer.csv", true, true)
+let df_product = Frame.ReadCsv ("n:/home/makoto/100knocks-preprocess/docker/work/data/product.csv", true, true)
+let df_category = Frame.ReadCsv ("n:/home/makoto/100knocks-preprocess/docker/work/data/category.csv", true, true)
+let df_geocode = Frame.ReadCsv ("n:/home/makoto/100knocks-preprocess/docker/work/data/geocode.csv", true, true)
+
+#!markdown
+
+P-061
+
+レシート明細データフレーム（df_receipt）の売上金額（amount）を顧客ID（customer_id）ごとに合計し、合計した売上金額を常用対数化（底=10）して顧客ID、売上金額合計とともに表示せよ。ただし、顧客IDが"Z"から始まるのものは非会員を表すため、除外して計算すること。結果は10件表示させれば良い。
+
+#!fsharp
+
+let df_sum_per_customer = 
+    df_receipt
+    |> filterRowValues (fun os -> os.GetAs<string>("customer_id").StartsWith("Z") |> not)
+    |> aggregateRowsBy ["customer_id"] ["amount"] Stats.sum in
+ 
+let srs_sum_log = df_sum_per_customer?amount |> Series.mapValues Math.Log10 in
+   
+df_sum_per_customer
+|> addCol "amount_log" srs_sum_log
+|> sortRows "customer_id"
+|> indexRowsOrdinally
+|> take 10
+
+#!markdown
+
+P-062
+
+レシート明細データフレーム（df_receipt）の売上金額（amount）を顧客ID（customer_id）ごとに合計し、合計した売上金額を自然対数化(底=e）して顧客ID、売上金額合計とともに表示せよ。ただし、顧客IDが"Z"から始まるのものは非会員を表すため、除外して計算すること。結果は10件表示させれば良い。
+
+#!fsharp
+
+let df_sum_per_customer = 
+    df_receipt
+    |> filterRowValues (fun os -> os.GetAs<string>("customer_id").StartsWith("Z") |> not)
+    |> aggregateRowsBy ["customer_id"] ["amount"] Stats.sum in
+ 
+let srs_sum_log = df_sum_per_customer?amount |> Series.mapValues Math.Log in
+
+df_sum_per_customer
+|> addCol "amount_log" srs_sum_log
+|> sortRows "customer_id"
+|> indexRowsOrdinally
+|> take 10
+
+#!markdown
+
+P-063
+
+商品データフレーム（df_product）の単価（unit_price）と原価（unit_cost）から、各商品の利益額を算出せよ。結果は10件表示させれば良い。
+
+#!fsharp
+
+df_product
+|> addCol "unit_profit" (df_product?unit_price - df_product?unit_cost)
+|> take 10
+
+#!markdown
+
+P-064
+
+商品データフレーム（df_product）の単価（unit_price）と原価（unit_cost）から、各商品の利益率の全体平均を算出せよ。ただし、単価と原価にはNULLが存在することに注意せよ。
+
+#!fsharp
+
+(df_product?unit_price - df_product?unit_cost) / df_product?unit_price
+|> Series.filterValues (fun is -> is >= 0.0)
+|> Stats.mean
+
+#!markdown
+
+P-065
+
+商品データフレーム（df_product）の各商品について、利益率が30%となる新たな単価を求めよ。ただし、1円未満は切り捨てること。そして結果を10件表示させ、利益率がおよそ30％付近であることを確認せよ。ただし、単価（unit_price）と原価（unit_cost）にはNULLが存在することに注意せよ。
+
+#!markdown
+
+新しいカラムを作って追加する方法
+
+#!fsharp
+
+df_product
+|> addCol
+     "new_price"
+     ((10.0 * df_product?unit_cost  / 7.0)
+      |> Series.mapValues int )
+|> (fun df -> 
+     df |> addCol
+             "new_profit_rate"
+             ((df?new_price - df?unit_cost) / df?new_price))
+
+#!markdown
+
+各行を順に処理し、追加していく方法。遅い。おそらくbox/unboxのため。
+
+#!fsharp
+
+df_product.Rows
+|> Series.map (fun k os ->
+    let unit_cost = os.GetAs<float>("unit_cost")
+    let new_price = floor (10.0 * unit_cost  / 7.0)
+    let new_profit_rate = (new_price - unit_cost) / new_price
+    Series.merge os
+        (series [ "new_price" => new_price; "new_profit_rate" => new_profit_rate]))
+|> Frame.ofRows
+
+#!markdown
+
+P-066
+
+商品データフレーム（df_product）の各商品について、利益率が30%となる新たな単価を求めよ。今回は、1円未満を四捨五入すること（0.5については偶数方向の丸めで良い）。そして結果を10件表示させ、利益率がおよそ30％付近であることを確認せよ。ただし、単価（unit_price）と原価（unit_cost）にはNULLが存在することに注意せよ。
+
+#!fsharp
+
+df_product
+|> addCol
+     "unit_price_new" 
+     ( (10.0 * df_product?unit_cost / 7.0) 
+       |> Series.mapValues (fun x -> Math.Round(x) |> int))
+|> (fun df -> 
+     df |> addCol
+             "unit_profit_rate"
+             ((df?unit_price_new - df?unit_cost) / df?unit_price_new))
+|> take 10
+
+#!markdown
+
+P-067
+
+商品データフレーム（df_product）の各商品について、利益率が30%となる新たな単価を求めよ。今回は、1円未満を切り上げること。そして結果を10件表示させ、利益率がおよそ30％付近であることを確認せよ。ただし、単価（unit_price）と原価（unit_cost）にはNULLが存在することに注意せよ。
+
+#!fsharp
+
+df_product
+|> addCol
+        "unit_price_new" 
+        ( (10.0 * df_product?unit_cost / 7.0) 
+        |> Series.mapValues (fun x ->  Math.Ceiling(x) |> int))
+|> take 10
+|> (fun df -> 
+        df |> addCol "unit_profit_rate"
+            ((df?unit_price_new - df?unit_cost) / df?unit_price_new))
+
+#!markdown
+
+P-068
+
+商品データフレーム（df_product）の各商品について、消費税率10%の税込み金額を求めよ。 1円未満の端数は切り捨てとし、結果は10件表示すれば良い。ただし、単価（unit_price）にはNULLが存在することに注意せよ。
+
+#!fsharp
+
+df_product
+|> addCol "price_tax" 
+    (df_product?unit_price
+     |> Series.mapValues (fun up  -> Math.Floor(1.1 * up) ))
+|> take 10
+
+#!markdown
+
+P-069
+
+レシート明細データフレーム（df_receipt）と商品データフレーム（df_product）を結合し、顧客毎に全商品の売上金額合計と、カテゴリ大区分（category_major_cd）が"07"（瓶詰缶詰）の売上金額合計を計算の上、両者の比率を求めよ。抽出対象はカテゴリ大区分"07"（瓶詰缶詰）の購入実績がある顧客のみとし、結果は10件表示させればよい。
+
+#!fsharp
+
+//helper function
+
+let mergeColumnFromForeignFrame<'X, 'C, 'R1, 'R2 
+              when 'C: equality and 'R1: equality and 'R2: equality>
+   (column_to_be_copied: 'C) (missingValue: 'X) (indexed_frame: Frame<'R2,'C>)
+   (key_column: 'C) (primary_frame: Frame<'R1,'C>)  =
+
+  let srs_references: Series<'R1, 'R2> = 
+      primary_frame |> getCol key_column
+
+  let (srs_cols_to_be_merged: Series<_,'X>) = 
+    getCol column_to_be_copied indexed_frame
+
+  let new_srs = 
+    srs_references 
+    |> Series.mapValues 
+        (fun x -> if srs_cols_to_be_merged.ContainsKey(x) then
+                    srs_cols_to_be_merged.[x]
+                  else missingValue)
+
+  addCol column_to_be_copied new_srs primary_frame
+
+#!fsharp
+
+let df_receit_with_category_major_cd_added = 
+  mergeColumnFromForeignFrame<string,_,_,_> 
+     "category_major_cd"
+     ""
+     (df_product |> indexRowsString "product_cd")
+     "product_cd"
+     df_receipt in
+
+let df_receit_with_category_major_cd_and_amount_y_added =
+     let srs = 
+        mapRowValues 
+          (fun os -> 
+            if os.GetAs<int>("category_major_cd") = 7 then
+                os.GetAs<int>("amount")
+            else 0)
+          df_receit_with_category_major_cd_added
+     addCol "amount_y" srs df_receit_with_category_major_cd_added in
+
+let df_tmp =
+  df_receit_with_category_major_cd_and_amount_y_added
+  |> aggregateRowsBy ["customer_id"] ["amount"; "amount_y"] Stats.sum
+  |> filterRows (fun _ os -> os.GetAs<int>("amount_y") <> 0)
+  |> sortRows "customer_id" in
+
+let srs =  mapRowValues 
+                (fun os ->
+                    let amount = os.GetAs<int>("amount") |> float
+                    let amount_y = os.GetAs<int>("amount_y") |> float
+                    amount_y/amount) df_tmp in
+addCol "rate_7" srs df_tmp
+|> take 10
+
+#!markdown
+
+P-070
+
+レシート明細データフレーム（df_receipt）の売上日（sales_ymd）に対し、顧客データフレーム（df_customer）の会員申込日（application_date）からの経過日数を計算し、顧客ID（customer_id）、売上日、会員申込日とともに表示せよ。結果は10件表示させれば良い（なお、sales_ymdは数値、application_dateは文字列でデータを保持している点に注意）。
+
+#!fsharp
+
+let df_first_receipt_customer_only =
+    df_receipt
+    |> filterRowValues 
+        (fun os -> (os.GetAs<string> "customer_id").StartsWith("ZZ") |> not 
+                    && os.GetAs<int> "receipt_sub_no" = 1) in
+    
+let df_receipt_with_application_date_added =
+        mergeColumnFromForeignFrame<string,_,_,_> 
+            "application_date"
+            ""
+            (df_customer |> indexRowsString "customer_id")
+            "customer_id"
+            df_first_receipt_customer_only in
+
+
+df_receipt_with_application_date_added 
+|> sliceCols ["customer_id"; "sales_ymd"; "application_date" ]
+|> Frame.rows
+|> Series.mapValues (fun os -> 
+                let int2dateTime i =
+                    DateTime.ParseExact(i.ToString(), "yyyyMMdd", null) 
+                let p = os.GetAs<int>("application_date") |> int2dateTime
+                let q = os.GetAs<int>("sales_ymd") |> int2dateTime
+                Series.merge os (series ["elapsed_dates" => int (floor ((q - p).TotalDays))]))
+|> Frame.ofRows
+|> filterRowsBy "customer_id" "CS006214000001"
+
+#!markdown
+
+P-071
+
+レシート明細データフレーム（df_receipt）の売上日（sales_ymd）に対し、顧客データフレーム（df_customer）の会員申込日（application_date）からの経過月数を計算し、顧客ID（customer_id）、売上日、会員申込日とともに表示せよ。結果は10件表示させれば良い（なお、sales_ymdは数値、application_dateは文字列でデータを保持している点に注意）。1ヶ月未満は切り捨てること。
+
+#!fsharp
+
+let df_first_receipt_customer_only =
+    df_receipt
+    |> filterRowValues 
+        (fun os -> (os.GetAs<string> "customer_id").StartsWith("ZZ") |> not 
+                    && os.GetAs<int> "receipt_sub_no" = 1) in
+    
+let df_receipt_with_application_date_added =
+        mergeColumnFromForeignFrame<string,_,_,_> 
+           "application_date"
+           ""
+           (df_customer |> indexRowsString "customer_id")
+           "customer_id"
+           df_first_receipt_customer_only in
+
+df_receipt_with_application_date_added
+|> sliceCols ["customer_id"; "sales_ymd"; "application_date" ]
+|> Frame.rows
+|> Series.mapValues (fun os -> 
+                let int2dateTime i =
+                    DateTime.ParseExact(i.ToString(), "yyyyMMdd", null) 
+                let p = os.GetAs<int>("application_date") |> int2dateTime
+                let q = os.GetAs<int>("sales_ymd") |> int2dateTime
+                Series.merge os (series ["elapsed_months" => int (floor ((q - p).TotalDays / 30.4375))]))
+|> Frame.ofRows
+|> sortRows "customer_id"
+|> take 10
+
+#!markdown
+
+P-072
+
+レシート明細データフレーム（df_receipt）の売上日（sales_ymd）に対し、顧客データフレーム（df_customer）の会員申込日（application_date）からの経過年数を計算し、顧客ID（customer_id）、売上日、会員申込日とともに表示せよ。結果は10件表示させれば良い。（なお、sales_ymdは数値、application_dateは文字列でデータを保持している点に注意）。1年未満は切り捨てること。
+
+#!fsharp
+
+let df_first_receipt_customer_only =
+    df_receipt
+    |> filterRowValues 
+        (fun os -> (os.GetAs<string> "customer_id").StartsWith("ZZ") |> not 
+                    && os.GetAs<int> "receipt_sub_no" = 1) in
+    
+let df_receipt_with_application_date_added =
+        mergeColumnFromForeignFrame<string,_,_,_> 
+           "application_date"
+           ""
+           (df_customer |> indexRowsString "customer_id")
+           "customer_id"
+           df_first_receipt_customer_only in
+
+df_receipt_with_application_date_added
+|> sliceCols ["customer_id"; "sales_ymd"; "application_date" ]
+|> Frame.rows
+|> Series.mapValues (fun os -> 
+                let int2dateTime i =
+                    DateTime.ParseExact(i.ToString(), "yyyyMMdd", null) 
+                let p = os.GetAs<int>("application_date") |> int2dateTime
+                let q = os.GetAs<int>("sales_ymd") |> int2dateTime
+                Series.merge os (series ["elapsed_years" => int (floor ((q - p).TotalDays / 365.25 ))]))
+|> Frame.ofRows
+|> filterRowsBy "customer_id" "CS006214000001"
+
+#!markdown
+
+P-073
+
+レシート明細データフレーム（df_receipt）の売上日（sales_ymd）に対し、顧客データフレーム（df_customer）の会員申込日（application_date）からのエポック秒による経過時間を計算し、顧客ID（customer_id）、売上日、会員申込日とともに表示せよ。結果は10件表⽰させれば良い（なお、sales_ymdは数値、application_dateは⽂字列でデータを保持している点に注意）。なお、時間情報は保有していないため各日付は0時0分0秒を表すものとする。
+
+#!fsharp
+
+let df_first_receipt_customer_only =
+    df_receipt
+    |> filterRowValues 
+        (fun os -> (os.GetAs<string> "customer_id").StartsWith("ZZ") |> not 
+                    && os.GetAs<int> "receipt_sub_no" = 1) in
+    
+let df_receipt_with_application_date_added =
+        mergeColumnFromForeignFrame<string,_,_,_> 
+           "application_date"
+           ""
+           (df_customer |> indexRowsString "customer_id")
+           "customer_id"
+           df_first_receipt_customer_only in
+
+df_receipt_with_application_date_added
+|> sliceCols ["customer_id"; "sales_ymd"; "application_date" ]
+|> Frame.rows
+|> Series.mapValues (fun os -> 
+                let int2dateTime i =
+                    DateTime.ParseExact(i.ToString(), "yyyyMMdd", null)
+                let p = os.GetAs<int>("application_date") |> int2dateTime
+                let q = os.GetAs<int>("sales_ymd") |> int2dateTime
+                Series.merge os (series ["elapsed_years" => (q-p).TotalSeconds]))
+|> Frame.ofRows
+|> filterRowsBy "customer_id" "CS006214000001"
+
+#!markdown
+
+P-074
+
+レシート明細データフレーム（df_receipt）の売上日（sales_ymd）に対し、当該週の月曜日からの経過日数を計算し、売上日、当該週の月曜日付とともに表示せよ。結果は10件表示させれば良い（なお、sales_ymdは数値でデータを保持している点に注意）。
+
+#!markdown
+
+列を調べ、列を足すという方針。調べるためにはまず列をgetColで取り出している。この方法はつぎの方法より速い。
+
+#!fsharp
+
+let int2dateTime i =
+    DateTime.ParseExact(i.ToString(), "yyyyMMdd", null)
+let (sales_ymd_srs: Series<_,string>)  = getCol "sales_ymd" df_receipt
+let pair_srs = 
+    sales_ymd_srs
+    |> Series.mapValues 
+        (fun sales_ymd -> 
+            let sales_ymd_as_datetime = int2dateTime sales_ymd 
+            let daysSinceMonday = 
+                    (7 + int (sales_ymd_as_datetime.DayOfWeek) 
+                    - int (DayOfWeek.Monday)) % 7
+            let monday = sales_ymd_as_datetime.AddDays (- (float daysSinceMonday))
+            monday, daysSinceMonday)
+let last_monday_srs = Series.mapValues fst pair_srs
+let days_since_monday_srs = Series.mapValues snd pair_srs
+df_receipt 
+|> sliceCols ["customer_id"; "sales_ymd"]
+|> addCol "last_monday" last_monday_srs
+|> addCol "elasped_days_since_monday" days_since_monday_srs
+|> take 10
+
+#!markdown
+
+各行を調べながら項目を追加していくという方針。列ごとの処理はFrame.rowsを取ってからmapValuesを適用してmergeで書き直し、Frame.ofRowsでフレームに戻す。こちらのほうが分かりやすいが遅い。理由は、おそらくbox/unboxのあたり。
+
+#!fsharp
+
+df_receipt 
+|> sliceCols ["customer_id"; "sales_ymd"]
+|> Frame.rows
+|> Series.mapValues (fun os -> 
+                let int2dateTime i =
+                  DateTime.ParseExact(i.ToString(), "yyyyMMdd", null)
+                let sales_ymd = 
+                        os.GetAs<string>("sales_ymd") |> int2dateTime
+                let daysSinceMonday = 
+                        (7 + int (sales_ymd.DayOfWeek) 
+                        - int (DayOfWeek.Monday)) % 7
+                let monday = sales_ymd.AddDays (- (float daysSinceMonday))
+        
+                Series.merge os (series ["last_monday" => monday; "elasped_days_since_monday" => daysSinceMonday]))
+|> Frame.ofRows
+|> take 10
+
+#!markdown
+
+両方の折衷。調べるまでは列ごとに処理するが、追加は行ごとに行う。列ごとの処理は、Frame.rowsを取ってからmapValuesを適用する。そこで作ったseriesを、あとでまとめて追加する。分かりやすいし、速い。とくに複数の列を調べて複数の列を作る場合には、このスタイルがもっともよいだろう。
+
+#!fsharp
+
+let srs_pairs = 
+    df_receipt 
+    |> Frame.rows
+    |> Series.mapValues (fun os -> 
+                let int2dateTime i =
+                        DateTime.ParseExact(i.ToString(), "yyyyMMdd", null)
+                let sales_ymd = 
+                        os.GetAs<string>("sales_ymd") |> int2dateTime
+                let daysSinceMonday = 
+                        (7 + int (sales_ymd.DayOfWeek) 
+                        - int (DayOfWeek.Monday)) % 7
+                let monday = sales_ymd.AddDays (- (float daysSinceMonday))
+                (monday, daysSinceMonday))
+
+let srs_monday = Series.mapValues fst srs_pairs
+let srs_daysSinceMonday = Series.mapValues snd srs_pairs
+df_receipt 
+|> sliceCols ["customer_id"; "sales_ymd"]
+|> addCol "last_monday" srs_monday
+|> addCol "elasped_days_since_monday" srs_daysSinceMonday
+|> take 10
+
+#!markdown
+
+P-075
+
+顧客データフレーム（df_customer）からランダムに1%のデータを抽出し、先頭から10件データを抽出せよ。
+
+#!fsharp
+
+let getSample count (fr: Deedle.Frame<'a, 'b>) =
+    let rowKeyList = fr.RowKeys
+    let rand =  Random(DateTime.Now.Millisecond)
+    let x = rowKeyList |> Seq.sortBy (fun x -> rand.Next())
+    [ for key in Seq.take count x ->
+        (key, fr.GetRow key) ]
+    |> Frame.ofRows
+
+df_customer
+|> getSample (df_customer.RowCount / 100)
+|> take 10
+
+#!markdown
+
+P-076
+
+顧客データフレーム（df_customer）から性別（gender_cd）の割合に基づきランダムに10%のデータを層化抽出データし、性別ごとに件数を集計せよ。
+
+#!fsharp
+
+let mergeAllAndIndexOrdinally (frameSeq: seq<Frame<'a, 'b>>) =
+    seq {for frame in frameSeq do 
+            yield! frame |> Frame.rows |> Series.values }
+            //行のキーが捨てられていることに注意
+    |> Series.ofValues 
+    |> Frame.ofRows 
+
+let df_male_customer_sample =
+    df_customer
+    |> filterRowValues (fun os -> os.GetAs<int>("gender_cd") = 0)
+    |> (fun df -> getSample (df.RowCount / 10) df)
+
+let df_female_customer_sample =
+    df_customer
+    |> filterRowValues (fun os -> os.GetAs<int>("gender_cd") = 1)
+    |> (fun df -> getSample (df.RowCount / 10) df)
+
+let df_unknown_customer_sample =
+    df_customer
+    |> filterRowValues (fun os -> os.GetAs<int>("gender_cd") = 9)
+    |> (fun df -> getSample (df.RowCount / 10) df)
+
+let df_tmp = 
+  mergeAllAfterReIndexingOrdinally 
+    [df_male_customer_sample;df_female_customer_sample;df_unknown_customer_sample]
+    
+aggregateRowsBy ["gender_cd"] ["customer_id"] Stats.count df_tmp
+
+#!fsharp
+
+df_tmp |> take 10
+
+#!markdown
+
+P-077
+
+レシート明細データフレーム（df_receipt）の売上金額（amount）を顧客単位に合計し、合計した売上金額の外れ値を抽出せよ。ただし、顧客IDが"Z"から始まるのものは非会員を表すため、除外して計算すること。なお、ここでは外れ値を平均から3σ以上離れたものとする。結果は10件表示させれば良い。
+
+#!fsharp
+
+let df_aggregatedReceipt = 
+    df_receipt
+    |> filterRowValues 
+        (fun os -> os.GetAs<string>("customer_id").StartsWith("Z") |> not)
+    |> aggregateRowsBy ["customer_id"] ["amount"] Stats.sum in
+
+let (srs: Series<_, int>) = 
+    df_aggregatedReceipt.GetColumn "amount" in
+let average = Stats.mean srs in
+let stdDev = Stats.stdDev srs in
+let srs_amount_ss = srs |> Series.mapValues (fun x -> (float x - average) / stdDev) in
+addCol "amount_ss" srs_amount_ss df_aggregatedReceipt
+|> filterRowValues (fun os -> os.GetAs<float>("amount_ss") |> abs > 3.0)
+|> sortRows "customer_id"
+|> take 10
+
+#!markdown
+
+P-078
+
+レシート明細テーブル（receipt）の売上金額（amount）を顧客単位に合計し、合計した売上金額の外れ値を抽出せよ。ただし、顧客IDが"Z"から始まるのものは非会員を表すため、除外して計算すること。なお、ここでは外れ値を第一四分位と第三四分位の差であるIQRを用いて、「第一四分位数-1.5×IQR」よりも下回るもの、または「第三四分位数+1.5×IQR」を超えるものとする。結果は10件表示させれば良い。
+
+#!fsharp
+
+let df_aggregatedReceipt = 
+    df_receipt
+    |> filterRowValues 
+        (fun os -> os.GetAs<string>("customer_id").StartsWith("Z") |> not)
+    |> aggregateRowsBy ["customer_id"] ["amount"] Stats.sum in
+ 
+let prc75 = 
+    Deedle.Math.Stats.quantile(df_aggregatedReceipt?amount, 0.75) in 
+let prc25 = 
+    Deedle.Math.Stats.quantile(df_aggregatedReceipt?amount, 0.25) in
+let unreasonable amount = 
+    let iqr = prc75 - prc25 
+    amount < prc25 - (1.5 * iqr) 
+    ||  prc75 + (1.5 * iqr) < amount in
+df_aggregatedReceipt 
+|> filterRowValues 
+            (fun os -> unreasonable (os.GetAs<float>("amount")))
+|> sortRows "customer_id"
+|> take 10
+
+#!markdown
+
+P-079
+
+商品データフレーム（df_product）の各項目に対し、欠損数を確認せよ。
+
+#!fsharp
+
+for KeyValue(k,v) in df_product.Columns.GetAllObservations() do
+    printfn "%s %d" k (df_product.RowCount -   Series.countValues v.Value) 
+
+#!markdown
+
+P-080
+
+商品データフレーム（df_product）のいずれかの項目に欠損が発生しているレコードを全て削除した新たなdf_product_1を作成せよ。なお、削除前後の件数を表示させ、前設問で確認した件数だけ減少していることも確認すること。
+
+#!fsharp
+
+let df_product_1  = 
+    df_product
+    |> dropSparseRows
+
+printfn "%d" (df_product.RowCount - df_product_1.RowCount)

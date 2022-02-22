@@ -1,0 +1,667 @@
+#!markdown
+
+まず関連するライブラリを読み込む。
+
+#!fsharp
+
+#r "nuget:Deedle,2.5.0"
+#r "nuget:Deedle.Math,2.5.0"
+#r "nuget:FSharp.Charting,2.1.0"
+#i "nuget:https://www.myget.org/F/gregs-experimental-packages/api/v3/index.json"
+#r "nuget:Deedle.DotNet.Interactive.Extension,0.1.0-alpha8"
+open System
+open Deedle
+open Deedle.Frame
+open Deedle.Math
+open MathNet.Numerics.Statistics
+open Deedle.``F# Frame extensions``
+open System.Text.RegularExpressions
+open System.Linq
+open System.Collections.Generic
+
+#!markdown
+
+ファイルの読み込み
+
+#!fsharp
+
+let df_receipt = Frame.ReadCsv ("n:/home/makoto/100knocks-preprocess/docker/work/data/receipt.csv", true, true)
+let df_store = Frame.ReadCsv ("n:/home/makoto/100knocks-preprocess/docker/work/data/store.csv", true, true)
+let df_customer = Frame.ReadCsv ("n:/home/makoto/100knocks-preprocess/docker/work/data/customer.csv", true, true)
+let df_product = Frame.ReadCsv ("n:/home/makoto/100knocks-preprocess/docker/work/data/product.csv", true, true)
+let df_category = Frame.ReadCsv ("n:/home/makoto/100knocks-preprocess/docker/work/data/category.csv", true, true)
+let df_geocode = Frame.ReadCsv ("n:/home/makoto/100knocks-preprocess/docker/work/data/geocode.csv", true, true)
+
+#!markdown
+
+P-081
+
+単価（unit_price）と原価（unit_cost）の欠損値について、それぞれの平均値で補完した新たなdf_product_2を作成せよ。なお、平均値について1円未満は四捨五入とし、0.5については偶数寄せでかまわない。補完実施後、各項目について欠損が生じていないことも確認すること。
+
+#!fsharp
+
+let int_mean (srs: Series<_, int>) =
+    let floatMean = Stats.mean srs
+    System.Math.Round(floatMean, 0, System.MidpointRounding.ToEven)
+    |> int
+let df_product_2 =
+    let (srs_unit_price: Series<_, int>) = df_product.GetColumn "unit_price"
+    let (srs_unit_cost: Series<_, int>)  = df_product.GetColumn "unit_cost"
+    df_product
+    |> replaceCol "unit_price"
+        (srs_unit_price |> Series.fillMissingWith (int_mean srs_unit_price))
+    |> replaceCol "unit_cost"
+        (srs_unit_cost |> Series.fillMissingWith (int_mean srs_unit_cost))
+df_product_2
+
+#!fsharp
+
+df_product.RowCount - (df_product_2 |> dropSparseRows |> Frame.countRows)
+
+#!markdown
+
+P-082
+
+単価（unit_price）と原価（unit_cost）の欠損値について、それぞれの中央値で補完した新たなdf_product_3を作成せよ。なお、中央値について1円未満は四捨五入とし、0.5については偶数寄せでかまわない。補完実施後、各項目について欠損が生じていないことも確認すること。
+
+#!fsharp
+
+let int_median (srs: Series<_, int>) =
+    let floatMedian = Stats.median srs
+    System.Math.Round(floatMedian, 0, System.MidpointRounding.ToEven)
+    |> int
+
+let df_product_3 =
+    let (srs_unit_price: Series<_, int>) = df_product.GetColumn "unit_price"
+    let (srs_unit_cost: Series<_, int>)  = df_product.GetColumn "unit_cost"
+    df_product
+    |> replaceCol "unit_price"
+        (srs_unit_price |> Series.fillMissingWith (int_median srs_unit_price))
+    |> replaceCol "unit_cost"
+        (srs_unit_cost |> Series.fillMissingWith (int_median srs_unit_price))
+df_product_3
+
+#!fsharp
+
+df_product.RowCount - (df_product_3 |> dropSparseRows |> Frame.countRows)
+
+#!markdown
+
+P-083
+
+単価（unit_price）と原価（unit_cost）の欠損値について、各商品の小区分（category_small_cd）ごとに算出した中央値で補完した新たなdf_product_4を作成せよ。なお、中央値について1円未満は四捨五入とし、0.5については偶数寄せでかまわない。補完実施後、各項目について欠損が生じていないことも確認すること。
+
+#!fsharp
+
+let int_median (srs: Series<_, int>) =
+    let floatMedian = Stats.median srs
+    System.Math.Round(floatMedian, 0, System.MidpointRounding.ToEven)
+    |> int
+
+let df_product_4 = 
+    let (srs_unit_price: Series<_, int>) = df_product.GetColumn "unit_price"
+    let (srs_unit_cost: Series<_, int>)  = df_product.GetColumn "unit_cost"
+    let df_product_grouped_by_small_cd = 
+        df_product 
+        |> aggregateRowsBy 
+             ["category_small_cd"] ["unit_price"; "unit_cost"] int_median
+        |> indexRowsInt "category_small_cd"
+    let median_for_small_category colName (key: int) =
+        let (scsc:int) = (df_product.GetColumn "category_small_cd").[key]
+        (df_product_grouped_by_small_cd.GetColumn colName).[scsc]
+    df_product
+    |> replaceCol "unit_price"
+        (srs_unit_price 
+         |> Series.fillMissingUsing 
+             (fun k -> median_for_small_category "unit_price" k))
+    |> replaceCol "unit_cost"
+        (srs_unit_cost
+        |> Series.fillMissingUsing
+             (fun k -> median_for_small_category "unit_cost" k))
+df_product_4
+
+#!fsharp
+
+printfn "%d" (df_product.RowCount - (df_product_4 |> dropSparseRows |> Frame.countRows))
+
+#!markdown
+
+P-084
+
+顧客データフレーム（df_customer）の全顧客に対し、全期間の売上金額に占める2019年売上金額の割合を計算せよ。ただし、販売実績のない場合は0として扱うこと。そして計算した割合が0超のものを抽出せよ。 結果は10件表示させれば良い。また、作成したデータにNAやNANが存在しないことを確認せよ。
+
+#!fsharp
+
+//二つのフレームを作って別々にaggregateしてからjoinする。
+
+let df_amount_amount_2019_rate = 
+        let df_receipt_for_real_customer =
+                df_receipt
+                |> filterRowValues (fun os -> os.GetAs<string>("customer_id").StartsWith("Z") |> not) 
+
+        let df_total_amount_per_customer_in_2019 =
+                df_receipt_for_real_customer 
+                |> filterRowValues (fun os -> let ymd =  os.GetAs<int>("sales_ymd")
+                                              20190101 <= ymd && ymd < 20200101)
+                |> aggregateRowsBy ["customer_id"] ["amount"] Stats.sum
+                |> mapColKeys (fun k -> if k = "amount" then "amount_2019" else k)
+                |> indexRowsString "customer_id" 
+
+        let df_total_amount_per_customer = 
+                df_receipt_for_real_customer
+                |> aggregateRowsBy ["customer_id"] ["amount"] Stats.sum 
+                |> indexRowsString "customer_id" 
+
+        join JoinKind.Outer df_total_amount_per_customer_in_2019 df_total_amount_per_customer
+        |> Frame.fillMissingWith 0.0  
+  
+df_amount_amount_2019_rate?amount_rate <- df_amount_amount_2019_rate?amount_2019 / df_amount_amount_2019_rate?amount
+
+df_amount_amount_2019_rate
+|> sortRowsByKey
+|> filterRowValues (fun os ->  os.GetAs<float>( "amount_rate") > 0.0)
+|> take 10
+
+#!fsharp
+
+//amount_2019というcolumnを足してから一度だけaggregateする
+
+let df_amount_amount_2019_rate = 
+
+    let df_receipt_for_real_customer =
+        df_receipt
+           |> filterRowValues (fun os -> os.GetAs<string>("customer_id").StartsWith("Z") |> not)
+
+    let srs_sales_ymd_for_real_customer =
+        df_receipt_for_real_customer 
+        |> mapRowValues (fun os ->let ymd =  os.GetAs<int>("sales_ymd")
+                                  if 20190101 <= ymd && ymd < 20200101 then 
+                                    os.GetAs<int>("amount")
+                                  else 0)
+
+    df_receipt_for_real_customer
+    |> addCol "amount_2019" srs_sales_ymd_for_real_customer
+    |> aggregateRowsBy ["customer_id"] ["amount"; "amount_2019"] Stats.sum
+    |> indexRowsString "customer_id"
+
+df_amount_amount_2019_rate?amount_rate <- df_amount_amount_2019_rate?amount_2019 / df_amount_amount_2019_rate?amount
+
+df_amount_amount_2019_rate
+|> sortRowsByKey
+|> filterRowValues (fun os -> os.GetAs<float>( "amount_rate") > 0.0)
+|> take 10
+
+#!markdown
+
+P-085
+
+顧客データフレーム（df_customer）の全顧客に対し、郵便番号（postal_cd）を用いて経度緯度変換用データフレーム（df_geocode）を紐付け、新たなdf_customer_1を作成せよ。ただし、複数紐づく場合は経度（longitude）、緯度（latitude）それぞれ平均を算出すること。
+
+#!fsharp
+
+//helper function
+
+let mergeColumnFromForeignFrame<'X, 'C, 'R1, 'R2 
+              when 'C: equality and 'R1: equality and 'R2: equality>
+   (column_to_be_copied: 'C)  (indexed_frame: Frame<'R2,'C>)
+   (key_column: 'C)  (missingValue: 'X) (primary_frame: Frame<'R1,'C>) =
+
+  let srs_references: Series<'R1, 'R2> = 
+      primary_frame |> getCol key_column
+
+  let (srs_cols_to_be_merged: Series<_,'X>) = 
+    getCol column_to_be_copied indexed_frame
+
+  let new_srs = 
+    srs_references 
+    |> Series.mapValues 
+        (fun x -> if srs_cols_to_be_merged.ContainsKey(x) then srs_cols_to_be_merged.[x] else missingValue)
+
+  addCol column_to_be_copied new_srs primary_frame
+
+#!fsharp
+
+let df_geocode_aggregated_and_indexed = 
+     df_geocode
+     |> aggregateRowsBy ["postal_cd"] ["longitude"; "latitude"] Stats.mean
+     |> indexRowsString "postal_cd"
+
+let df_customer_1 =
+  df_customer
+  |> mergeColumnFromForeignFrame<float,_,_,_> "longitude" df_geocode_aggregated_and_indexed "postal_cd" 0.0
+  |> mergeColumnFromForeignFrame<float,_,_,_> "latitude" df_geocode_aggregated_and_indexed "postal_cd"  0.0
+
+df_customer_1
+|> dropCol "gender_cd"
+|> dropCol "age"
+|> dropCol "birth_day"
+
+#!fsharp
+
+let df = Frame.ofValues (seq {(1,'a', 9); (2,'b', 3)})
+let srs = df.['a']
+srs.[1]
+
+Series.tryMap 
+
+#!markdown
+
+P-086
+
+前設問で作成した緯度経度つき顧客データフレーム（df_customer_1）に対し、申込み店舗コード（application_store_cd）をキーに店舗データフレーム（df_store）と結合せよ。そして申込み店舗の緯度（latitude）・経度情報（longitude)と顧客の緯度・経度を用いて距離（km）を求め、顧客ID（customer_id）、顧客住所（address）、店舗住所（address）とともに表示せよ。計算式は簡易式で良いものとするが、その他精度の高い方式を利用したライブラリを利用してもかまわない。結果は10件表示すれば良い。
+
+#!fsharp
+
+#r "nuget:System.Device.Location.Portable,1.0.0"
+open System.Device.Location
+
+let mkGeo (os: ObjectSeries<string>) lttdName lngtdName =
+    let lttd = os.GetAs<float>(lttdName) in
+    let lngtd = os.GetAs<float>(lngtdName) in
+    new GeoCoordinate(lttd, lngtd)
+
+let geocDistance (geoc1: GeoCoordinate) (geoc2: GeoCoordinate) =
+    geoc1.GetDistanceTo(geoc2) / 1000.0
+
+let df_store_indexed_by_cd = 
+  df_store 
+  |> indexRowsString "store_cd"
+  |> mapColKeys (fun ck -> match ck with 
+                           | "address" -> "store_address"
+                           | "longitude" -> "store_longitude"
+                           | "latitude" -> "store_latitude"
+                           | _ -> ck)
+
+let df_customer_1_with_df_store_added = 
+    df_customer_1
+    |> mergeColumnFromForeignFrame<string,_,_,_> "store_address" df_store_indexed_by_cd "application_store_cd" ""  
+    |> mergeColumnFromForeignFrame<float,_,_,_> "store_longitude" df_store_indexed_by_cd "application_store_cd" 0.0
+    |> mergeColumnFromForeignFrame<float,_,_,_> "store_latitude" df_store_indexed_by_cd "application_store_cd"  0.0
+
+
+let srs_dist = 
+    df_customer_1_with_df_store_added 
+    |> mapRowValues 
+        (fun os -> (mkGeo os "latitude" "longitude",
+                    mkGeo os "store_latitude" "store_longitude")
+                   ||> geocDistance)
+
+df_customer_1_with_df_store_added
+|> Frame.rows
+|> Series.mapValues 
+    (fun os -> let x = mkGeo os "latitude" "longitude"
+               let y = mkGeo os "store_latitude" "store_longitude"
+               Series.merge 
+                os 
+                (series ["distance" => geocDistance x y]))
+|> Frame.ofRows
+|> sliceCols ["customer_id"; "address"; "store_address";"distance"]
+|> filterRowsBy  "customer_id" "CS021412000147"
+
+#!markdown
+
+P-087
+
+顧客データフレーム（df_customer）では、異なる店舗での申込みなどにより同一顧客が複数登録されている。名前（customer_name）と郵便番号（postal_cd）が同じ顧客は同一顧客とみなし、1顧客1レコードとなるように名寄せした名寄顧客データフレーム（df_customer_u）を作成せよ。ただし、同一顧客に対しては売上金額合計が最も高いものを残すものとし、売上金額合計が同一もしくは売上実績の無い顧客については顧客ID（customer_id）の番号が小さいものを残すこととする。
+
+#!fsharp
+
+//Frame.aggregateRowsBy ["customer_name"; "postal_cd"] ["address"] (fun x -> x.Values |> List.ofSeq |> List.length ) df_customer
+//|> filterRows (fun k os -> os.GetAs<int>("address") > 1)
+df_customer
+|> filterRowsBy "customer_name" "久野 みゆき"
+
+#!fsharp
+
+df_receipt
+        |> filterRows (fun _ os -> os.GetAs<string>("customer_id").StartsWith("Z") |> not)
+        |> aggregateRowsBy ["customer_id"] ["amount"] Stats.sum
+        |> indexRowsString "customer_id"
+
+#!fsharp
+
+let getFirstByAmountThenCustomerId3 k (df:Frame<int, string>)=
+ //   if df.RowCount > 1 then printfn "%A" k
+    let mutable maxAmount = 0
+    let mutable minCid = "D"
+    let mutable foundOs = None
+    
+    for os in df.Rows.Values do
+        let amnt = os.GetAs<int>("amount")
+        let cid = os.GetAs<string>("customer_id")
+        if maxAmount < amnt then
+            foundOs <- Some(os) 
+            maxAmount <- amnt
+            minCid <- cid
+        elif maxAmount = amnt && minCid > cid then
+            foundOs <- Some(os) 
+            minCid <- cid
+    foundOs.Value
+
+let df_amount_per_customer = 
+    df_receipt
+        |> filterRows (fun _ os -> os.GetAs<string>("customer_id").StartsWith("Z") |> not)
+        |> aggregateRowsBy ["customer_id"] ["amount"] Stats.sum
+        |> indexRowsString "customer_id"
+
+let df_customer_with_amount_per_customer_added = 
+    mergeColumnFromForeignFrame<float,_,_,_> "amount" df_amount_per_customer "customer_id" 0.0 df_customer
+
+let df_customer_u = 
+    df_customer_with_amount_per_customer_added
+    |> groupRowsByString "postal_cd"
+    |> groupRowsByString "customer_name"
+    |> Frame.mapRowKeys (fun (x, (y, z)) -> (x,y), z)
+    |> nest
+    |> Series.map getFirstByAmountThenCustomerId3
+    |> Frame.ofRows
+
+df_customer_u
+|> filterRowsBy "customer_name" "久野 みゆき"
+
+#!fsharp
+
+df_customer 
+|> filterRowsBy "customer_name" "黒崎 彩"
+
+#!markdown
+
+P-088
+
+前設問で作成したデータを元に、顧客データフレームに統合名寄IDを付与したデータフレーム（df_customer_n）を作成せよ。ただし、統合名寄IDは以下の仕様で付与するものとする。
+- 重複していない顧客：顧客ID（customer_id）を設定
+- 重複している顧客：前設問で抽出したレコードの顧客IDを設定
+
+#!fsharp
+
+let df_customer_n =
+  let (srs_nayose_id: Series<_, string>) =
+    df_customer_u.GetColumn "customer_id"
+
+  let new_srs = 
+    seq {for os in df_customer.Rows.ValuesAll do
+            let customer_name = os.GetAs<string>("customer_name")
+            let postal_cd = os.GetAs<string>("postal_cd")
+            yield srs_nayose_id.[(customer_name, postal_cd)] }
+    |> Seq.map2 (fun x y -> (x,y)) df_customer.RowKeys
+    |> Series.ofObservations
+  Frame.addCol "nayose_id" new_srs df_customer
+  
+df_customer_n
+|> sliceCols ["customer_id"; "customer_name"; "postal_cd"; "nayose_id"]
+|> filterRows (fun k os -> os.GetAs<string>("nayose_id") = os.GetAs<string>("customer_id"))
+
+#!markdown
+
+P-089
+
+売上実績のある顧客に対し、予測モデル構築のため学習用データとテスト用データに分割したい。それぞれ8:2の割合でランダムにデータを分割せよ。
+
+#!fsharp
+
+let getSample count (fr: Deedle.Frame<'a, 'b>) =
+    let rowKeyList = fr.RowKeys
+    let rand =  Random(DateTime.Now.Millisecond)
+    let x = rowKeyList |> Seq.sortBy (fun x -> rand.Next())
+    [ for key in Seq.take count x ->
+        (key, fr.GetRow key) ]
+    |> Frame.ofRows
+
+let df_amount_per_customer = 
+     df_receipt
+     |> filterRows (fun k os -> os.GetAs<string>("customer_id").StartsWith("ZZ") |> not)
+     |> aggregateRowsBy ["customer_id"] ["amount"] Stats.count
+     |> indexRowsString "customer_id"
+    
+let df_customer_with_sales = 
+    mergeColumnFromForeignFrame<float,_,_,_> "amount" df_amount_per_customer "customer_id" 0.0 df_customer
+    |> filterRows (fun k os -> os.GetAs<float>("amount") <> 0.0 )
+
+
+let df_8 =
+    df_customer_with_sales
+    |> getSample ((df_customer_with_sales.RowCount * 4) / 5) 
+
+let df_2 = 
+    seq {for k in df_customer_with_sales.RowKeys do
+            if df_8.RowKeys.Contains(k) |> not 
+                then yield (k, df_customer_with_sales.Rows.[k]) }
+    |> Frame.ofRows
+
+printfn "%d" df_8.RowCount
+printfn "%d" df_2.RowCount
+
+#!markdown
+
+P-090: レシート明細データフレーム（df_receipt）は2017年1月1日〜2019年10月31日までのデータを有している。売上金額（amount）を月次で集計し、学習用に12ヶ月、テスト用に6ヶ月のモデル構築用データを3セット作成せよ。
+
+#!fsharp
+
+let df_amount_per_month = 
+    df_receipt
+    |> sliceCols ["sales_ymd"; "amount"]
+    |> groupRowsUsing (fun rk os -> let ymd = os.GetAs<int>"sales_ymd" in ymd / 100)
+    |> sliceCols ["amount"]
+    |> applyLevel fst Stats.sum
+    |> sortRowsByKey
+    |> (fun df -> 
+        let pairs = df.RowKeys |> Seq.map (fun x -> (x, x))
+        let srs = series pairs
+        addCol "sales_ym" srs df)
+    |> indexRowsOrdinally
+let split_data df train_size test_size slide_window start_point =
+    let train_start = start_point * slide_window
+    let test_start = train_start + train_size
+    let train_df = df  |> filterRows (fun k _ -> train_start <= k && k < train_start + train_size )
+    let test_df  = df  |> filterRows (fun k _ -> test_start <= k && k < test_start + test_size )
+    train_df, test_df
+
+let df_train_1, df_test_1  = split_data df_amount_per_month 12 6 6 0
+let df_train_2, df_test_2  = split_data df_amount_per_month 12 6 6 1
+let df_train_3, df_test_3  = split_data df_amount_per_month 12 6 6 2
+df_train_1
+df_test_1
+
+#!markdown
+
+P-091
+
+顧客データフレーム（df_customer）の各顧客に対し、売上実績のある顧客数と売上実績のない顧客数が1:1となるようにアンダーサンプリングで抽出せよ。
+
+#!fsharp
+
+let getSample count (fr: Deedle.Frame<'a, 'b>) =
+    let rowKeyList = fr.RowKeys
+    let rand =  Random(DateTime.Now.Millisecond)
+    let x = rowKeyList |> Seq.sortBy (fun x -> rand.Next())
+    [ for key in Seq.take count x ->
+        (key, fr.GetRow key) ]
+    |> Frame.ofRows
+
+
+let customer_with_or_without_purchase = 
+    df_receipt
+    |> filterRows (fun k os -> os.GetAs<string>("customer_id").StartsWith("ZZ") |> not)
+    |> aggregateRowsBy ["customer_id"] ["amount"] Stats.count
+    |> indexRowsString "customer_id"
+    |> (fun df -> 
+        let hashSet = new HashSet<string>(df.Rows.Keys)
+        fun custid -> hashSet.Contains custid)
+
+let under_sampling2  (test: string -> bool) =
+    let customers_with_purcase = 
+      df_customer
+      |> filterRowValues 
+        (fun os -> os.GetAs<string>("customer_id") 
+                    |> customer_with_or_without_purchase)
+
+    let customers_without_purcase = 
+      df_customer
+      |> filterRowValues 
+        (fun os -> os.GetAs<string>("customer_id") 
+                    |> customer_with_or_without_purchase
+                    |> not)
+    let minCount = 
+        min customers_with_purcase.RowCount 
+            customers_without_purcase.RowCount
+    getSample minCount customers_with_purcase,
+    getSample minCount customers_without_purcase
+
+let und1, und2 = under_sampling2 customer_with_or_without_purchase
+
+#!fsharp
+
+und2
+
+#!markdown
+
+P-092
+
+顧客データフレーム（df_customer）では、性別に関する情報が非正規化の状態で保持されている。これを第三正規化せよ。
+
+#!fsharp
+
+let df_gender1 = 
+    df_customer
+    |> sliceCols ["gender_cd"; "gender"]
+    |> groupRowsByString "gender"
+    |> nest
+    |> Series.mapValues (fun v -> (v.GetColumn("gender_cd"): Series<_, int>))
+    |> Series.mapValues (fun srs -> srs.ValuesAll |> Set.ofSeq)
+    
+let df_customer_s =
+    df_customer
+    |> Frame.dropCol "gender"
+
+df_gender1
+
+#!markdown
+
+P-093
+
+商品データフレーム（df_product）では各カテゴリのコード値だけを保有し、カテゴリ名は保有していない。カテゴリデータフレーム（df_category）と組み合わせて非正規化し、カテゴリ名を保有した新たな商品データフレームを作成せよ。
+
+#!fsharp
+
+let df_product_full =
+    let df_category_indexed_by_small_cd =  
+        df_category
+        |> Frame.indexRowsInt "category_small_cd"
+
+    df_product
+    |> mergeColumnFromForeignFrame<string,_,_,_> "category_major_name" df_category_indexed_by_small_cd "category_small_cd" "" 
+    |> mergeColumnFromForeignFrame<string,_,_,_> "category_medium_name" df_category_indexed_by_small_cd "category_small_cd" "" 
+    |> mergeColumnFromForeignFrame<string,_,_,_> "category_small_name" df_category_indexed_by_small_cd "category_small_cd" "" 
+
+df_product_full
+
+#!markdown
+
+P-094
+
+先に作成したカテゴリ名付き商品データを以下の仕様でファイル出力せよ。なお、出力先のパスはdata配下とする。
+
+- ファイル形式はCSV（カンマ区切り）
+- ヘッダ有り
+- 文字コードはUTF-8
+
+#!fsharp
+
+df_product_full.SaveCsv("n:/home/makoto/100knocks-preprocess/docker/work/data/product_full94.csv", includeRowKeys=false)
+
+#!markdown
+
+P-095
+
+先に作成したカテゴリ名付き商品データを以下の仕様でファイル出力せよ。なお、出力先のパスはdata配下とする。
+- ファイル形式はCSV（カンマ区切り）
+- ヘッダ有り
+- 文字コードはCP932
+
+#!fsharp
+
+open System.IO
+let os = new FileStream("n:/home/makoto/100knocks-preprocess/docker/work/data/product_full95.csv", FileMode.Create)
+let tw  =  new StreamWriter(os, System.Text.CodePagesEncodingProvider.Instance.GetEncoding(932))
+df_product_full.SaveCsv(tw, includeRowKeys=false)
+tw.Close()
+os.Close()
+
+#!markdown
+
+P-096
+
+先に作成したカテゴリ名付き商品データを以下の仕様でファイル出力せよ。なお、出力先のパスはdata配下とする。
+- ファイル形式はCSV（カンマ区切り）
+- ヘッダ無し
+- 文字コードはUTF-8
+
+#!fsharp
+
+let p096() = 
+    //ヘッダなし出力がDeedleにはないので、StringWriterを使って一度書き出したあとで、ヘッダ行以外を読み込む
+    use stringWriter = new System.IO.StringWriter()
+    df_product_full.SaveCsv(stringWriter, includeRowKeys=false)
+    stringWriter.Close()
+    use stringReader = new System.IO.StringReader(stringWriter.ToString())
+    use finalStreamWriter = new System.IO.StreamWriter(new FileStream("n:/home/makoto/100knocks-preprocess/docker/work/data/product_full96Rev.csv", FileMode.Create),  Text.Encoding.UTF8)
+    stringReader.ReadLine() |> ignore //ヘッダ行を捨てている
+    while stringReader.Peek() <> -1 do
+        finalStreamWriter.WriteLine(stringReader.ReadLine())
+
+#!markdown
+
+P-097
+
+先に作成した以下形式のファイルを読み込み、データフレームを作成せよ。また、先頭10件を表示させ、正しくとりまれていることを確認せよ。
+
+- ファイル形式はCSV（カンマ区切り）
+- ヘッダ有り
+- 文字コードはUTF-8
+
+#!fsharp
+
+Frame.ReadCsv ("n:/home/makoto/100knocks-preprocess/docker/work/data/product_full94.csv", true, true)
+|> take 10
+
+#!markdown
+
+P-098
+
+先に作成した以下形式のファイルを読み込み、データフレームを作成せよ。また、先頭10件を表示させ、正しくとりまれていることを確認せよ。
+- ファイル形式はCSV（カンマ区切り）
+- ヘッダ無し
+- 文字コードはUTF-8
+
+#!fsharp
+
+Frame.ReadCsv ("n:/home/makoto/100knocks-preprocess/docker/work/data/product_full96Rev.csv", false)
+|> take 10
+
+#!markdown
+
+P-099
+
+先に作成したカテゴリ名付き商品データを以下の仕様でファイル出力せよ。なお、出力先のパスはdata配下とする。
+- ファイル形式はTSV（タブ区切り）
+- ヘッダ有り
+- 文字コードはUTF-8
+
+#!fsharp
+
+df_product_full.SaveCsv("n:/home/makoto/100knocks-preprocess/docker/work/data/product_full99.tsv", includeRowKeys=false)
+
+#!markdown
+
+P-100
+
+先に作成した以下形式のファイルを読み込み、データフレームを作成せよ。また、先頭10件を表示させ、正しくとりまれていることを確認せよ。
+
+- ファイル形式はTSV（タブ区切り）
+- ヘッダ有り
+- 文字コードはUTF-8
+
+#!fsharp
+
+Frame.ReadCsv ("n:/home/makoto/100knocks-preprocess/docker/work/data/product_full99.tsv", separators="\t")
+|> take 10

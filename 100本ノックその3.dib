@@ -1,0 +1,689 @@
+#!markdown
+
+まず関連するライブラリを読み込む。
+
+#!fsharp
+
+#r "nuget:Deedle,2.5.0"
+#r "nuget:Deedle.Math,2.5.0"
+#r "nuget:FSharp.Charting,2.1.0"
+#i "nuget:https://www.myget.org/F/gregs-experimental-packages/api/v3/index.json"
+#r "nuget:Deedle.DotNet.Interactive.Extension,0.1.0-alpha8"
+open System
+open Deedle
+open Deedle.Frame
+open Deedle.Math
+open MathNet.Numerics.Statistics
+open Deedle.``F# Frame extensions``
+open System.Text.RegularExpressions
+open System.Linq
+open System.Collections.Generic
+
+#!markdown
+
+ファイルの読み込み
+
+#!fsharp
+
+let df_receipt = Frame.ReadCsv ("n:/home/makoto/100knocks-preprocess/docker/work/data/receipt.csv", true, true)
+let df_store = Frame.ReadCsv ("n:/home/makoto/100knocks-preprocess/docker/work/data/store.csv", true, true)
+let df_customer = Frame.ReadCsv ("n:/home/makoto/100knocks-preprocess/docker/work/data/customer.csv", true, true)
+let df_product = Frame.ReadCsv ("n:/home/makoto/100knocks-preprocess/docker/work/data/product.csv", true, true)
+let df_category = Frame.ReadCsv ("n:/home/makoto/100knocks-preprocess/docker/work/data/category.csv", true, true)
+let df_geocode = Frame.ReadCsv ("n:/home/makoto/100knocks-preprocess/docker/work/data/geocode.csv", true, true)
+
+#!markdown
+
+P-41
+
+レシート明細データフレーム（df_receipt）の売上金額（amount）を日付（sales_ymd）ごとに集計し、前日からの売上金額増減を計算せよ。なお、計算結果は10件表示すればよい。
+
+#!markdown
+
+shiftだけを使う版
+
+#!fsharp
+
+df_receipt
+|> aggregateRowsBy ["sales_ymd"] ["amount"] Stats.sum
+|> sortRows "sales_ymd"
+|> indexRowsOrdinally
+|> (fun origFrame -> 
+      let shiftedFrame = 
+            origFrame 
+              |> mapColKeys 
+                    (fun cn -> match cn with 
+                               | "sales_ymd" -> "lag_ymd" 
+                               | "amount" -> "lag_amount" 
+                               | _ -> cn) 
+              |> shift 1
+      merge origFrame shiftedFrame) //共通するkeyに基づいて列を足し合わせる
+|> (fun toBeModifiedFrame -> 
+        toBeModifiedFrame?diff_amount <- toBeModifiedFrame?amount - toBeModifiedFrame?lag_amount
+        toBeModifiedFrame)
+|> take 10
+
+#!markdown
+
+diffを使うほうがずっと簡単
+
+#!fsharp
+
+let df_aggregated = 
+  df_receipt
+  |> aggregateRowsBy ["sales_ymd"] ["amount"] Stats.sum
+  |> sortRows "sales_ymd"
+  |> indexRowsOrdinally
+
+df_aggregated 
+|> diff 1 
+|> mapColKeys (function "amount" -> "diff_amount" | x -> x)
+|> dropCol "sales_ymd"
+|> merge df_aggregated
+
+#!markdown
+
+P-42
+
+レシート明細データフレーム（df_receipt）の売上金額（amount）を日付（sales_ymd）ごとに集計し、各日付のデータに対し、１日前、２日前、３日前のデータを結合せよ。結果は10件表示すればよい。
+
+#!fsharp
+
+//縦持ちケース
+df_receipt
+|> aggregateRowsBy ["sales_ymd"] ["amount"] Stats.sum
+|> sortRows "sales_ymd"
+|> indexRowsOrdinally
+|> (fun origFrame ->
+    let keyRename cn =
+        match cn with 
+        | "sales_ymd" -> "lag_ymd" 
+        | "amount" -> "lag_amount" 
+        | _ -> cn
+    let shiftedFrames = 
+        [| for i = 1 to 3 do
+                yield origFrame 
+                        |> mapColKeys keyRename
+                        |> shift i
+                        |> merge origFrame |]
+
+    let threeDaysAgo = shiftedFrames.[2].IndexRowsWith(Enumerable.Range(0, origFrame.RowCount))
+    let twoDaysAgo = shiftedFrames.[1].IndexRowsWith(Enumerable.Range(origFrame.RowCount, origFrame.RowCount))
+    let oneDayAgo = shiftedFrames.[0].IndexRowsWith(Enumerable.Range(2 * origFrame.RowCount, origFrame.RowCount))
+    mergeAll [threeDaysAgo; twoDaysAgo; oneDayAgo]
+    |> Frame.sortRows "sales_ymd")
+|> dropSparseRows 
+|> take 10
+
+#!fsharp
+
+//横持ちケース
+df_receipt
+|> aggregateRowsBy ["sales_ymd"] ["amount"] Stats.sum
+|> sortRows "sales_ymd"
+|> indexRowsOrdinally
+|> (fun origFrame -> 
+    let keyRename numOfDays cn  =
+        match cn with 
+        | "sales_ymd" -> "lag_ymd_" + numOfDays
+        | "amount" -> "lag_amount_" + numOfDays
+        | _ -> cn
+    let oneDayAgo = 
+        origFrame 
+            |> mapColKeys (keyRename "_1") 
+            |> shift 1
+    let twoDaysAgo = 
+        origFrame 
+            |> mapColKeys (keyRename "_2") 
+            |> shift 2
+    let threeDaysAgo = 
+        origFrame
+            |> mapColKeys (keyRename "_3") 
+            |> shift 3
+    mergeAll [origFrame; oneDayAgo; twoDaysAgo; threeDaysAgo])
+|> skip 3 
+|> take 10
+
+#!markdown
+
+P-43
+
+レシート明細データフレーム（df_receipt）と顧客データフレーム（df_customer）を結合し、性別（gender）と年代（ageから計算）ごとに売上金額（amount）を合計した売上サマリデータフレーム（df_sales_summary）を作成せよ。
+性別は0が男性、1が女性、9が不明を表すものとする。
+
+ただし、項目構成は年代、女性の売上金額、男性の売上金額、性別不明の売上金額の4項目とすること（縦に年代、横に性別のクロス集計）。また、年代は10歳ごとの階級とすること。
+
+#!markdown
+
+まずガリガリ書いてみる
+
+#!fsharp
+
+let df_customer_id_indexed = 
+    df_customer
+    |> indexRowsString "customer_id"
+
+let df_customer_receipt = 
+    df_receipt
+    |> filterRowValues (fun os -> os.GetAs<string>("customer_id").StartsWith("Z") |> not)
+
+let (srs_customer_id: Series<int, string>) = 
+    df_customer_receipt |> getCol "customer_id"
+
+let ( srs_gender: Series<int,int>) = 
+    srs_customer_id 
+    |> Series.mapValues (fun x -> df_customer_id_indexed.GetColumn("gender_cd").[x])
+
+let ( srs_era: Series<int,int>) = 
+    srs_customer_id 
+    |> Series.mapValues (fun x -> df_customer_id_indexed.GetColumn("age").[x] / 10 * 10)
+
+
+let df_aggregated =
+    df_customer_receipt
+    |> addCol "gender" srs_gender
+    |> addCol "era" srs_era
+    |> aggregateRowsBy ["gender"; "era"] ["amount"] Stats.sum
+
+let df_pivot =
+    df_aggregated
+    |> pivotTable 
+        (fun rk os -> os.GetAs<int>("era")) 
+        (fun rk os -> match os.GetAs<int>("gender") with 0 -> "male" | 1 -> "female" | 9 -> "unknown" | _ -> failwith "hen")
+        (fun x -> 
+            x?amount |> Stats.sum)
+
+
+let df_sales_summary =
+    df_pivot
+    |> Frame.rows
+    |> Series.map (fun k t -> Series.merge t (series ["era" => k]))
+    |> Frame.ofRows
+    |> sortRowsByKey
+    |> sortColsByKey
+
+df_sales_summary
+
+#!fsharp
+
+//helper function
+
+let mergeColumnFromForeignFrame<'X, 'C, 'R1, 'R2 
+              when 'C: equality and 'R1: equality and 'R2: equality>
+   (column_to_be_copied: 'C)  (missingValue: 'X) (indexed_frame: Frame<'R2,'C>)
+   (key_column: 'C) (primary_frame: Frame<'R1,'C>)   =
+
+  let srs_references: Series<'R1, 'R2> = 
+      primary_frame |> getCol key_column
+
+  let (srs_cols_to_be_merged: Series<_,'X>) = 
+    getCol column_to_be_copied indexed_frame
+
+  let new_srs = 
+    srs_references 
+    |> Series.mapValues 
+        (fun x -> if srs_cols_to_be_merged.ContainsKey(x) then
+                    srs_cols_to_be_merged.[x] 
+                  else missingValue)
+
+  addCol column_to_be_copied new_srs primary_frame
+
+#!markdown
+
+mergeColumnFromForeignFrameを使えば短く書ける。groupを一回で済ませるとか、PivotTableの略記法を使うとか工夫している。
+
+#!fsharp
+
+let df_customer_id_indexed = 
+    df_customer
+    |> indexRowsString "customer_id"
+
+let df_customer_receipt = 
+    df_receipt
+    |> filterRowValues (fun os -> os.GetAs<string>("customer_id").StartsWith("Z") |> not)
+
+let df_aggregated =
+  df_customer_receipt
+  |> mergeColumnFromForeignFrame<int,_,_,_>  "gender_cd" -1 df_customer_id_indexed  "customer_id" 
+  |> mergeColumnFromForeignFrame<int,_,_,_>  "age" 0 df_customer_id_indexed  "customer_id" 
+  |> groupRowsUsing (fun k os -> os.GetAs<string>("gender_cd"), os.GetAs<int>("age") / 10 * 10)
+  |> nest
+  |> Series.mapValues (fun df -> df?amount |> Stats.sum)
+  |> Series.map (fun (gender_cd, era) amount -> {|gender_cd = gender_cd; era = era; amount = amount|})
+  |> Series.values
+  |> Frame.ofRecords 
+
+let df_pivot =
+    df_aggregated.PivotTable("era", "gender_cd", (fun x -> x?amount |> Stats.sum))
+    |> mapColKeys (function 0 -> "male" | 1 -> "female" | 9 -> "unknown" | _ -> failwith "hen")
+
+let df_sales_summary =
+    df_pivot
+    |> Frame.rows
+    |> Series.map (fun k t -> Series.merge t (series ["era" => k]))
+    |> Frame.ofRows
+    |> sortRowsByKey 
+    
+df_sales_summary
+
+#!markdown
+
+P-44
+
+前設問で作成した売上サマリデータフレーム（df_sales_summary）は性別の売上を横持ちさせたものであった。このデータフレームから性別を縦持ちさせ、年代、性別コード、売上金額の3項目に変換せよ。ただし、性別コードは男性を'00'、女性を'01'、不明を'99'とする。
+
+#!fsharp
+
+[for os in df_sales_summary.Rows.Values do
+        let b = series [ "era" => box (os.GetAs<int>("era"))  ]
+        if os.ContainsKey("male") then
+          yield Series.merge b (series ["gender_cd" =>box "00"; "amount" => box(os.GetAs<int>("male"))])
+        if os.ContainsKey("female") then
+          yield Series.merge b (series ["gender_cd" =>box "01"; "amount" => box(os.GetAs<int>("female"))])
+        if os.ContainsKey("unknown") then
+          yield Series.merge b (series ["gender_cd" =>box "99"; "amount" => box(os.GetAs<int>("unknown"))])]
+|> Frame.ofRowsOrdinal
+
+#!markdown
+
+P-45
+
+顧客データフレーム（df_customer）の生年月日（birth_day）は日付型（Date）でデータを保有している。これをYYYYMMDD形式の文字列に変換し、顧客ID（customer_id）とともに抽出せよ。データは10件を抽出すれば良い。
+
+#!markdown
+
+単に新しいフレームを作る版。転記する列が少なければこれが簡単
+
+#!fsharp
+
+Frame.ofColumns 
+  ["customer_id" => df_customer.GetColumn<string> "customer_id"; 
+   "birth_day" => let y = (df_customer.GetColumn<DateTime> "birth_day") in
+                  y |> Series.mapValues (fun (x: DateTime) -> sprintf "%4d%02d%02d"  x.Year x.Month x.Day)]
+|> take 10
+
+#!markdown
+
+新しいフレームをsliceColsによって作り、変更すべき列を新たに追加する版。
+
+#!fsharp
+
+let clone = sliceCols ["customer_id"] df_customer
+let y = 
+  df_customer.GetColumn<DateTime> "birth_day" 
+  |> Series.mapValues (fun x -> sprintf "%4d%02d%02d"  x.Year x.Month x.Day)
+clone?birth_day <- y
+clone |> take 10
+
+#!markdown
+
+前の版と同じだが表記がちょっと違う
+
+#!fsharp
+
+df_customer
+|> sliceCols ["customer_id"]
+|> (let bdsrs = 
+          df_customer.GetColumn<DateTime> "birth_day" 
+          |> Series.mapValues (fun x -> sprintf "%4d%02d%02d"  x.Year x.Month x.Day)
+    addCol "birth_day" bdsrs)
+|> take 10
+
+#!markdown
+
+これは列を足すのではなく、各行に項目を足している
+
+#!fsharp
+
+df_customer
+|> sliceCols ["customer_id"; "birth_day" ]
+|> mapRows (fun k os -> 
+                    let dt = os.GetAs<DateTime>("birth_day")
+                    let cid = os.Get("customer_id")
+                    let dtStr = sprintf "%4d%02d%02d" dt.Year dt.Month dt.Day
+                    series ["customer_id" => cid; "birth_day" => box dtStr])
+|> Frame.ofRows
+|> take 10
+
+#!markdown
+
+P-46
+
+顧客データフレーム（df_customer）の申し込み日（application_date）はYYYYMMDD形式の文字列型でデータを保有している。これを日付型（dateやdatetime）に変換し、顧客ID（customer_id）とともに抽出せよ。データは10件を抽出すれば良い。
+
+#!fsharp
+
+df_customer
+|> sliceCols ["customer_id"]
+|> (let bdsrs = 
+      df_customer.GetColumn<string> "application_date" 
+      |> Series.mapValues (fun x -> 
+            new DateTime(x.Substring(0,4) |> int, 
+                         x.Substring(4,2) |> int, 
+                         x.Substring(6,2) |> int))
+    addCol "application_date" bdsrs)
+|> take 10
+
+#!markdown
+
+P-47
+
+レシート明細データフレーム（df_receipt）の売上日（sales_ymd）はYYYYMMDD形式の数値型でデータを保有している。これを日付型（dateやdatetime）に変換し、レシート番号(receipt_no)、レシートサブ番号（receipt_sub_no）とともに抽出せよ。データは10件を抽出すれば良い。
+
+#!fsharp
+
+df_receipt
+|> sliceCols ["receipt_no"; "receipt_sub_no"]
+|> (let dateTimeSeries = 
+          df_receipt.GetColumn<int> "sales_ymd" 
+          |> Series.mapValues (fun x -> 
+                new DateTime(x / 10000, 
+                             (x % 10000) / 100, 
+                             x % 100))
+    addCol "sales_ymd" dateTimeSeries)
+|> take 10
+
+#!markdown
+
+P-48
+
+レシート明細データフレーム（df_receipt）の売上エポック秒（sales_epoch）は数値型のUNIX秒でデータを保有している。これを日付型（dateやdatetime）に変換し、レシート番号(receipt_no)、レシートサブ番号（receipt_sub_no）とともに抽出せよ。データは10件を抽出すれば良い。
+
+#!fsharp
+
+df_receipt
+|> sliceCols ["receipt_no"; "receipt_sub_no"]
+|> (let salesDateSeries = 
+          df_receipt.GetColumn<int> "sales_epoch" 
+          |> Series.mapValues 
+                (fun x -> 
+                   DateTimeOffset.FromUnixTimeSeconds(int64 x).Date)
+    addCol "sales_ymd" salesDateSeries)
+|> take 10
+
+#!markdown
+
+P-49
+
+レシート明細データフレーム（df_receipt）の売上エポック秒（sales_epoch）を日付型（timestamp型）に変換し、"年"だけ取り出してレシート番号(receipt_no)、レシートサブ番号（receipt_sub_no）とともに抽出せよ。データは10件を抽出すれば良い。
+
+#!fsharp
+
+df_receipt
+|> sliceCols ["receipt_no"; "receipt_sub_no"]
+|> (let salesDateSeries = 
+          df_receipt.GetColumn<int> "sales_epoch" 
+          |> Series.mapValues 
+                (fun x -> 
+                   DateTimeOffset.FromUnixTimeSeconds(int64 x).Year)
+    addCol "sales_ymd" salesDateSeries)
+|> take 10
+
+#!markdown
+
+P-050
+
+レシート明細データフレーム（df_receipt）の売上エポック秒（sales_epoch）を日付型（timestamp型）に変換し、"月"だけ取り出してレシート番号(receipt_no)、レシートサブ番号（receipt_sub_no）とともに抽出せよ。なお、"月"は0埋め2桁で取り出すこと。データは10件を抽出すれば良い。
+
+#!fsharp
+
+df_receipt
+|> sliceCols ["receipt_no"; "receipt_sub_no"]
+|> (let salesDateSeries = 
+          df_receipt.GetColumn<int> "sales_epoch" 
+          |> Series.mapValues 
+                (fun x -> 
+                   sprintf "%02d" (DateTimeOffset.FromUnixTimeSeconds(int64 x).Month))
+    addCol "sales_ymd" salesDateSeries)
+|> take 10
+
+#!markdown
+
+P-051
+
+レシート明細データフレーム（df_receipt）の売上エポック秒（sales_epoch）を日付型（timestamp型）に変換し、"日"だけ取り出してレシート番号(receipt_no)、レシートサブ番号（receipt_sub_no）とともに抽出せよ。なお、"日"は0埋め2桁で取り出すこと。データは10件を抽出すれば良い。
+
+#!fsharp
+
+df_receipt
+|> (let salesDaySeries = 
+          df_receipt.GetColumn<int> "sales_epoch" 
+          |> Series.mapValues 
+                (fun x -> 
+                   sprintf "%02d" (DateTimeOffset.FromUnixTimeSeconds(int64 x).Day))
+    addCol "sales_day" salesDaySeries)
+|> sliceCols ["receipt_no"; "receipt_sub_no"; "sales_day"]
+|> take 10
+
+#!markdown
+
+P-052
+
+レシート明細データフレーム（df_receipt）の売上金額（amount）を顧客ID（customer_id）ごとに合計の上、売上金額合計に対して2000円以下を0、2000円超を1に2値化し、顧客ID、売上金額合計とともに10件表示せよ。ただし、顧客IDが"Z"から始まるのものは非会員を表すため、除外して計算すること。
+
+#!fsharp
+
+df_receipt
+|> filterRowValues (fun os -> os.GetAs<string>("customer_id").StartsWith("Z") |> not)
+|> aggregateRowsBy ["customer_id"] ["amount"] Stats.sum
+|> sortRows "customer_id"
+|> (fun origFrame ->
+    let newSeries = origFrame?amount |> Series.mapValues (fun v -> if v > 2000.0 then 1 else 0) 
+    addCol "sales_flg" newSeries origFrame)
+
+#!markdown
+
+P-053
+
+顧客データフレーム（df_customer）の郵便番号（postal_cd）に対し、東京（先頭3桁が100〜209のもの）を1、それ以外のものを0に２値化せよ。さらにレシート明細データフレーム（df_receipt）と結合し、全期間において買い物実績のある顧客数を、作成した2値ごとにカウントせよ。
+
+#!fsharp
+
+let df_receipt_for_registered_customer =
+    df_receipt
+    |> filterRowValues 
+        (fun os -> 
+            (os.GetAs<string> "customer_id").StartsWith("ZZ") |> not) in
+let df_indexed_customer =
+    df_customer
+    |> (fun origFrame ->
+        let regexp = new Regex("^(1[0-9][0-9])|(20[0-9])")
+        let origSeries = origFrame.GetColumn<string> "postal_cd"
+        let newSeries = origSeries 
+                        |> Series.mapValues 
+                                (fun v -> if regexp.IsMatch(v) then 1 else 0)
+        addCol "postal_flg" newSeries origFrame)
+    |> indexRowsString "customer_id" in 
+mergeColumnFromForeignFrame<int,_,_,_>  
+    "postal_flg" -1 df_indexed_customer "customer_id" 
+    df_receipt_for_registered_customer
+|> sliceCols ["postal_flg"; "customer_id"]
+|> aggregateRowsBy ["postal_flg"] ["customer_id"] Stats.uniqueCount 
+
+#!markdown
+
+P-054
+
+顧客データデータフレーム（df_customer）の住所（address）は、埼玉県、千葉県、東京都、神奈川県のいずれかとなっている。都道府県毎にコード値を作成し、顧客ID、住所とともに抽出せよ。値は埼玉県を11、千葉県を12、東京都を13、神奈川県を14とすること。結果は10件表示させれば良い。
+
+#!fsharp
+
+df_customer
+|> sliceCols ["address"] 
+|> (let address2code (address: string) =
+        if address.StartsWith("埼玉県") then 11
+        elif address.StartsWith("千葉県") then 12
+        elif address.StartsWith("東京都") then 13
+        elif address.StartsWith("神奈川県") then 14
+        else failwith "hen"
+    mapColValues 
+        (fun os -> os 
+                   |> Series.map
+                        (fun x y -> 
+                            let str = y :?> string
+                            address2code str)))
+|> mapColKeys 
+    (fun colName -> 
+        if colName = "address" then "address_code" else colName )
+|> addCol "customer_id" (df_customer.GetColumn "customer_id")
+|> addCol "address" (df_customer.GetColumn "address")
+
+#!fsharp
+
+let address2code (address: string) =
+    if address.StartsWith("埼玉県") then 11
+    elif address.StartsWith("千葉県") then 12
+    elif address.StartsWith("東京都") then 13
+    elif address.StartsWith("神奈川県") then 14
+    else failwith "hen"
+
+df_customer
+|> sliceCols ["customer_id"; "address"] 
+|> addCol "address_code" 
+    ((df_customer.GetColumn<string> "address") 
+        |> Series.mapValues address2code)
+|> take 10
+
+#!markdown
+
+P-055
+
+レシート明細データフレーム（df_receipt）の売上金額（amount）を顧客ID（customer_id）ごとに合計し、その合計金額の四分位点を求めよ。その上で、顧客ごとの売上金額合計に対して以下の基準でカテゴリ値を作成し、顧客ID、売上金額と合計ともに表示せよ。カテゴリ値は上から順に1〜4とする。結果は10件表示させれば良い。- 最小値以上第一四分位未満- 第一四分位以上第二四分位未満- 第二四分位以上第三四分位未満- 第三四分位以上
+
+#!fsharp
+
+let amountPerCustomerDF = 
+    df_receipt
+    |> aggregateRowsBy ["customer_id"] ["amount"] Stats.sum 
+
+let (pct25 , pct50 , pct75 ) = 
+    let amntSrs = 
+        amountPerCustomerDF?amount
+    (Deedle.Math.Stats.quantile(amntSrs, 0.25),
+     Deedle.Math.Stats.quantile(amntSrs, 0.5),
+     Deedle.Math.Stats.quantile(amntSrs, 0.75) )
+
+let categorySeries = 
+    amountPerCustomerDF?amount
+    |> Series.mapValues (fun amount -> 
+                            let fa = float amount
+                            if fa < pct25 then 1
+                            elif fa < pct50 then 2
+                            elif fa < pct75 then 3
+                            else 4)
+
+amountPerCustomerDF
+|> addCol "category" categorySeries
+|> sortRows "customer_id"
+|> take 10
+
+#!fsharp
+
+ (pct25 , pct50 , pct75 ) 
+
+#!markdown
+
+P-056
+
+顧客データフレーム（df_customer）の年齢（age）をもとに10歳刻みで年代を算出し、顧客ID（customer_id）、生年月日（birth_day）とともに抽出せよ。ただし、60歳以上は全て60歳代とすること。年代を表すカテゴリ名は任意とする。先頭10件を表示させればよい。
+
+#!fsharp
+
+let newAgeSeries = 
+    df_customer.GetColumn<int>("age")
+    |> Series.mapValues (fun age -> min 60 ((age / 10) * 10)) in
+    
+let df_customer_era =
+    df_customer
+    |> sliceCols ["customer_id"; "birth_day"]
+    |> addCol "age" newAgeSeries
+
+df_customer_era
+|> take 10
+
+#!markdown
+
+P-057
+
+前問題の抽出結果と性別（gender）を組み合わせ、新たに性別×年代の組み合わせを表すカテゴリデータを作成せよ。組み合わせを表すカテゴリの値は任意とする。先頭10件を表示させればよい。
+
+#!fsharp
+
+let genderAgeCategory gender age = 
+    sprintf "%01d%02d" gender age in
+    
+let categorySeries = 
+    (df_customer.GetColumn<int>("gender_cd"),
+    df_customer_era.GetColumn<int>("age"))
+    ||> Series.zipInto (fun x y -> genderAgeCategory x y) in
+
+df_customer_era
+|> addCol "era_gender" categorySeries
+|> take 10
+
+#!markdown
+
+P-058
+
+顧客データフレーム（df_customer）の性別コード（gender_cd）をダミー変数化し、顧客ID（customer_id）とともに抽出せよ。結果は10件表示させれば良い。
+
+#!fsharp
+
+let gender_cd_series = df_customer.GetColumn<int>("gender_cd") in
+Frame(["customer_id"; "gender_cd_0"; "gender_cd_1";"gender_cd_9"],
+      [df_customer.GetColumn<string>("customer_id"); 
+       Series.mapValues (function 0 -> 1 | _ ->  0) gender_cd_series; 
+       Series.mapValues (function 1 -> 1 | _ ->  0) gender_cd_series; 
+       Series.mapValues (function 9 -> 1 | _ ->  0) gender_cd_series])
+|> take 10
+
+#!markdown
+
+P-059
+
+レシート明細データフレーム（df_receipt）の売上金額（amount）を顧客ID（customer_id）ごとに合計し、売上金額合計を平均0、標準偏差1に標準化して顧客ID、売上金額合計とともに表示せよ。標準化に使用する標準偏差は、不偏標準偏差と標本標準偏差のどちらでも良いものとする。ただし、顧客IDが"Z"から始まるのものは非会員を表すため、除外して計算すること。結果は10件表示させれば良い。
+
+#!fsharp
+
+let df_sum_per_customer = 
+    df_receipt
+    |> filterRowValues (fun os -> os.GetAs<string>("customer_id").StartsWith("Z") |> not)
+    |> aggregateRowsBy ["customer_id"] ["amount"] Stats.sum in
+
+let srs_sum = df_sum_per_customer?amount in
+let average = Stats.mean srs_sum in
+let stdDev = Stats.stdDev srs_sum in
+let srs_amount_ss = srs_sum |> Series.mapValues (fun x -> (x - average) / stdDev) in
+
+df_sum_per_customer
+|> addCol "amount_ss" srs_amount_ss
+|> sortRows "customer_id"
+|> indexRowsOrdinally
+|> take 10
+
+#!markdown
+
+P-060
+
+レシート明細データフレーム（df_receipt）の売上金額（amount）を顧客ID（customer_id）ごとに合計し、合計した売上金額を最小値0、最大値1に正規化して顧客ID、売上金額合計とともに表示せよ。ただし、顧客IDが"Z"から始まるのものは非会員を表すため、除外して計算すること。結果は10件表示させれば良い。
+
+#!fsharp
+
+let df_sum_per_customer = 
+    df_receipt
+    |> filterRowValues 
+        (fun os -> 
+            os.GetAs<string>("customer_id").StartsWith("Z") |> not)
+    |> aggregateRowsBy ["customer_id"] ["amount"] Stats.sum 
+
+let srs_sum = df_sum_per_customer?amount 
+let maxValue = Stats.max srs_sum 
+let minValue = Stats.min srs_sum 
+let srs_normalized_sum = 
+    srs_sum |> Series.mapValues (fun x -> (x - minValue) / maxValue)
+
+df_sum_per_customer
+|> addCol "normalized_amount" srs_normalized_sum
+|> sortRows "customer_id"
+|> indexRowsOrdinally
+|> take 10

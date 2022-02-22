@@ -1,0 +1,420 @@
+#!markdown
+
+まず関連するライブラリを読み込む。
+
+#!fsharp
+
+#r "nuget:Deedle,2.5.0"
+#r "nuget:Deedle.Math,2.5.0"
+#r "nuget:FSharp.Charting,2.1.0"
+#i "nuget:https://www.myget.org/F/gregs-experimental-packages/api/v3/index.json"
+#r "nuget:Deedle.DotNet.Interactive.Extension,0.1.0-alpha8"
+open System
+open Deedle
+open Deedle.Frame
+open Deedle.Math
+open MathNet.Numerics.Statistics
+open Deedle.``F# Frame extensions``
+open System.Text.RegularExpressions
+open System.Linq
+open System.Collections.Generic
+
+#!markdown
+
+ファイルの読み込み
+
+#!fsharp
+
+let df_receipt = Frame.ReadCsv ("n:/home/makoto/100knocks-preprocess/docker/work/data/receipt.csv", true, true)
+let df_store = Frame.ReadCsv ("n:/home/makoto/100knocks-preprocess/docker/work/data/store.csv", true, true)
+let df_customer = Frame.ReadCsv ("n:/home/makoto/100knocks-preprocess/docker/work/data/customer.csv", true, true)
+let df_product = Frame.ReadCsv ("n:/home/makoto/100knocks-preprocess/docker/work/data/product.csv", true, true)
+let df_category = Frame.ReadCsv ("n:/home/makoto/100knocks-preprocess/docker/work/data/category.csv", true, true)
+let df_geocode = Frame.ReadCsv ("n:/home/makoto/100knocks-preprocess/docker/work/data/geocode.csv", true, true)
+
+#!markdown
+
+問題1
+
+レシート明細データフレーム（df_receipt）から全項⽬の先頭10件を表⽰し、どのような
+データを保有しているか⽬視で確認せよ。
+
+#!fsharp
+
+df_receipt.Rows.[0..9]
+
+#!fsharp
+
+df_receipt 
+|> take 10 
+
+#!markdown
+
+問題2
+
+レシート明細データフレーム（df_receipt）から売上⽇（sales_ymd）、顧客ID
+（customer_id）、商品コード（product_cd）、売上⾦額（amount）の順に列を指定し、
+10件表⽰させよ。
+
+#!fsharp
+
+df_receipt.Columns.[ ["sales_ymd"; "customer_id";  "product_cd"; "amount"] ] |> take 10
+
+#!fsharp
+
+df_receipt 
+|> sliceCols ["sales_ymd"; "customer_id";  "product_cd"; "amount"] 
+|> take 10
+
+#!markdown
+
+問題3
+
+レシート明細データフレーム（df_receipt）から売上⽇（sales_ymd）、顧客ID
+（customer_id）、商品コード（product_cd）、売上⾦額（amount）の順に列を指定し、
+10件表⽰させよ。ただし、sales_ymdはsales_dateに項⽬名を変更しながら抽出するこ
+と。
+
+#!fsharp
+
+//RenameColumnを使う方法。RenameColumnは関数ではないのでパイプ(|>)で書けず、括弧でくるんでドット記法になる
+
+let df_receipt_renamed = 
+    df_receipt
+    |> sliceCols ["sales_ymd"; "customer_id";  "product_cd"; "amount"] 
+df_receipt_renamed.RenameColumn("sales_ymd","sales_date")
+df_receipt_renamed
+|> take 10
+
+#!fsharp
+
+df_receipt 
+|> sliceCols ["sales_ymd"; "customer_id";  "product_cd"; "amount"] 
+|> mapColKeys (function "sales_ymd" -> "sales_date" | x -> x)
+|> take 10
+
+#!markdown
+
+問題4
+
+レシート明細データフレーム（df_receipt）から売上⽇（sales_ymd）、顧客ID
+（customer_id）、商品コード（product_cd）、売上⾦額（amount）の順に列を指定し、
+以下の条件を満たすデータを抽出せよ。
+- 顧客ID（customer_id）が"CS018205000001"
+
+#!fsharp
+
+df_receipt.Columns.[ ["sales_ymd"; "customer_id";  "product_cd"; "amount"] ].Rows 
+|> Series.filter (fun _ y -> y.GetAs("customer_id") = "CS018205000001")
+|> Frame.ofRows
+
+#!fsharp
+
+df_receipt.Columns.[ ["sales_ymd"; "customer_id";  "product_cd"; "amount"] ]
+|> filterRows (fun _ y -> y.GetAs("customer_id")  = "CS018205000001")
+
+#!fsharp
+
+df_receipt 
+|> sliceCols ["sales_ymd"; "customer_id";  "product_cd"; "amount"] 
+|> filterRowsBy  "customer_id" "CS018205000001"
+
+#!markdown
+
+問題5
+
+レシート明細データフレーム（df_receipt）から売上⽇（sales_ymd）、顧客ID
+（customer_id）、商品コード（product_cd）、売上⾦額（amount）の順に列を指定し、
+以下の条件を満たすデータを抽出せよ。
+- 顧客ID（customer_id）が"CS018205000001"
+- 売上⾦額（amount）が1,000以上
+
+#!fsharp
+
+df_receipt.Columns.[ ["sales_ymd"; "customer_id";  "product_cd"; "amount"] ].Rows 
+|> Series.filterValues (fun os -> os.GetAs("amount") >= 1000 && os.GetAs("customer_id") = "CS018205000001")
+|> Frame.ofRows
+
+#!fsharp
+
+df_receipt.Columns.[ ["sales_ymd"; "customer_id";  "product_cd"; "amount"] ]
+|> filterRowValues (fun os -> os.GetAs("amount") >= 1000 && os.GetAs("customer_id") = "CS018205000001")
+
+#!markdown
+
+問題6
+
+レシート明細データフレーム（df_receipt）から売上⽇（sales_ymd）、顧客ID
+（customer_id）、商品コード（product_cd）、売上数量（quantity）、売上⾦額
+（amount）の順に列を指定し、以下の条件を満たすデータを抽出せよ。
+- 顧客ID（customer_id）が"CS018205000001"
+- 売上⾦額（amount）が1,000以上または売上数量（quantity）が5以上
+
+#!fsharp
+
+df_receipt 
+|> sliceCols ["sales_ymd"; "customer_id";  "product_cd"; "quantity"; "amount"] 
+|> filterRowsBy  "customer_id" "CS018205000001"
+|> filterRowValues (fun os -> os.GetAs<int>("amount") >= 1000 || os.GetAs<int>("quantity") >= 5)
+
+#!markdown
+
+問題7
+
+レシート明細データフレーム（df_receipt）から売上⽇（sales_ymd）、顧客ID
+（customer_id）、商品コード（product_cd）、売上⾦額（amount）の順に列を指定し、
+以下の条件を満たすデータを抽出せよ。
+- 顧客ID（customer_id）が"CS018205000001"
+- 売上⾦額（amount）が1,000以上2,000以下
+
+#!fsharp
+
+df_receipt.Columns.[ ["sales_ymd"; "customer_id";  "product_cd";  "amount"] ].Rows 
+|> Series.filter 
+    (fun _ y -> let z = y.GetAs<int>("amount") in 
+                1000 <= z && z <= 2000 
+                && y.GetAs<string>("customer_id") = "CS018205000001")
+|> Frame.ofRows
+
+#!fsharp
+
+df_receipt 
+|> sliceCols ["sales_ymd"; "customer_id";  "product_cd"; "quantity"; "amount"] 
+|> filterRowsBy  "customer_id" "CS018205000001"
+|> filterRowValues (fun os -> let amount = os.GetAs<int>("amount")
+                              1000 <= amount && amount <= 2000)
+
+#!markdown
+
+問題8
+
+レシート明細データフレーム（df_receipt）から売上⽇（sales_ymd）、顧客ID
+（customer_id）、商品コード（product_cd）、売上⾦額（amount）の順に列を指定し、
+以下の条件を満たすデータを抽出せよ。
+- 顧客ID（customer_id）が"CS018205000001"
+- 商品コード（product_cd）が"P071401019"以外
+
+#!fsharp
+
+df_receipt.Columns.[ ["sales_ymd"; "customer_id";  "product_cd";  "amount"] ].Rows 
+|> Series.filter (fun _ y -> y.GetAs<string>("product_cd") <> "P071401019" && y.GetAs<string>("customer_id") = "CS018205000001")
+|> Frame.ofRows
+
+#!fsharp
+
+df_receipt 
+|> sliceCols ["sales_ymd"; "customer_id";  "product_cd";"amount"] 
+|> filterRowsBy  "customer_id" "CS018205000001"
+|> filterRowValues (fun os -> os.GetAs<string>("product_cd") <> "P071401019")
+
+#!markdown
+
+問題9
+
+以下の処理において、出⼒結果を変えずにORをANDに書き換えよ。
+
+df_store.query('not(prefecture_cd == "13" | floor_area > 900)')
+
+#!fsharp
+
+df_store.Rows 
+|> Series.filterValues (fun os -> os.GetAs<int>("prefecture_cd") <> 13 && os.GetAs<float>("floor_area") <= 900.0)
+|> Frame.ofRows
+
+#!fsharp
+
+df_store 
+|> filterRowValues (fun os -> os.GetAs<int>("prefecture_cd") <> 13 && os.GetAs<float>("floor_area") <= 900.0)
+
+#!markdown
+
+問題10
+
+店舗データフレーム（df_store）から、店舗コード（store_cd）が"S14"で始まるものだけ
+全項⽬抽出し、10件だけ表⽰せよ。
+
+#!fsharp
+
+df_store 
+|> filterRowValues (fun os -> os.GetAs<string>("store_cd").StartsWith("S14"))
+|> take 10
+
+#!markdown
+
+問題11
+
+顧客データフレーム（df_customer）から顧客ID（customer_id）の末尾が1のものだけ全項⽬抽出し、10件だけ表⽰せよ。
+
+#!fsharp
+
+df_customer 
+|> filterRowValues (fun os -> os.GetAs<string>("customer_id").EndsWith("1"))
+|> take 10
+
+#!markdown
+
+問題12
+
+店舗データフレーム（df_store）から横浜市の店舗だけ全項⽬表⽰せよ。
+
+#!fsharp
+
+df_store 
+|> filterRowValues (fun os -> os.GetAs<string>("address").Contains("横浜市"))
+
+#!markdown
+
+問題13
+
+顧客データフレーム（df_customer）から、ステータスコード（status_cd）の先頭がアルファベットのA〜Fで始まるデータを全項⽬抽出し、10件だけ表⽰せよ。
+
+#!fsharp
+
+df_customer
+|> filterRowValues (let q13regex = new Regex("^[A-F]")
+                    fun os -> q13regex.IsMatch(os.GetAs<string>("status_cd"))) 
+|> take 10
+
+#!markdown
+
+問題14
+
+顧客データフレーム（df_customer）から、ステータスコード（status_cd）の末尾が数字
+の1〜9で終わるデータを全項⽬抽出し、10件だけ表⽰せよ。
+
+#!fsharp
+
+df_customer
+|> filterRowValues (let q14regex = new Regex("[1-9]$") 
+                    fun os -> q14regex.IsMatch(os.GetAs<string>("status_cd"))) 
+|> take 10
+
+#!markdown
+
+問題15
+
+顧客データフレーム（df_customer）から、ステータスコード（status_cd）の先頭がアル
+ファベットのA〜Fで始まり、末尾が数字の1〜9で終わるデータを全項⽬抽出し、10件だ
+け表⽰せよ。
+
+#!fsharp
+
+df_customer
+|> filterRowValues (let q15regex = new Regex("^[A-F].*[1-9]$")
+                    fun os -> q15regex.IsMatch(os.GetAs<string>("status_cd"))) 
+|> take 10
+
+#!markdown
+
+問題16
+
+店舗データフレーム（df_store）から、電話番号（tel_no）が3桁-3桁-4桁のデータを全項⽬表⽰せよ。
+
+#!fsharp
+
+df_store
+|> filterRowValues (let q16regex = new Regex("^\d{3}-\d{3}-\d{4}$")
+                    fun os -> q16regex.IsMatch(os.GetAs<string>("tel_no"))) 
+
+#!markdown
+
+問題17
+
+顧客データフレーム（df_customer）を⽣年⽉⽇（birth_day）で⾼齢順にソートし、先頭10件を全項⽬表⽰せよ
+
+#!fsharp
+
+df_customer
+|> sortRows "birth_day"
+|> take 10
+
+#!markdown
+
+問題18
+
+顧客データフレーム（df_customer）を生年月日（birth_day）で若い順にソートし、先頭10件を全項⽬表⽰せよ。
+
+#!fsharp
+
+df_customer
+|> sortRowsWith "birth_day" (fun (x: DateTime)  (y: DateTime) -> - x.CompareTo(y))
+|> take 10  
+
+#!fsharp
+
+df_customer
+|> Frame.sortRowsBy "birth_day" (fun (x: DateTime) -> DateTime.Today - x)
+|> take 10
+
+#!markdown
+
+問題19
+
+レシート明細データフレーム（df_receipt）に対し、1件あたりの売上金額
+（amount）が高い順にランクを付与し、先頭10件を抽出せよ。項目は顧客
+ID（customer_id）、売上金額（amount）、付与したランクを表示させること。
+なお、売上金額（amount）が等しい場合は同一順位を付与するものとする。
+
+#!markdown
+
+まずRankDefinition.Minの練習
+
+#!fsharp
+
+let xxx = Series.ofValues[1;2;5;2;3;6;2;1;6;8;2;3]
+Deedle.Math.Stats.ranks (xxx, RankDefinition.Min)
+|> Series.mapValues (fun fv -> int fv)
+
+#!fsharp
+
+let mamnt_srs = 
+    df_receipt.GetColumn<int> "amount"  
+    |> Series.mapValues (fun x -> - x)
+let rank_srs = 
+    Deedle.Math.Stats.ranks (mamnt_srs, RankDefinition.Min)
+    |> Series.mapValues (fun fv -> int fv)
+
+df_receipt
+|> sliceCols ["customer_id"; "amount"]
+|> addCol "ranking" rank_srs
+|> sortRows "ranking" 
+|> take 10
+
+#!fsharp
+
+df_receipt
+|>  sliceCols ["customer_id"; "amount"]
+|> (let mamnt_srs = 
+      df_receipt.GetColumn<int> "amount"  
+      |> Series.mapValues (fun x -> - x)
+    let rank_srs = 
+      Deedle.Math.Stats.ranks (mamnt_srs, RankDefinition.Min)
+      |> Series.mapValues (fun fv -> int fv) 
+    addCol "ranking" rank_srs)
+|> sortRows "ranking" 
+|> take 10
+
+//See https://github.com/fslaborg/Deedle/issues/372
+
+#!markdown
+
+問題20
+
+レシート明細テーブル（receipt）に対し、1件あたりの売上金額（amount）が高い順にラ
+ンクを付与し、先頭10件を抽出せよ。項目は顧客ID（customer_id）、売上金額
+（amount）、付与したランクを表示させること。なお、売上金額（amount）が等しい場
+合でも別順位を付与すること。
+
+#!fsharp
+
+df_receipt
+|>  sliceCols ["customer_id"; "amount"]
+|> (let mamnt_srs = 
+      df_receipt.GetColumn<int> "amount"  
+      |> Series.mapValues (fun x -> - x)
+    let rank_srs = 
+      Deedle.Math.Stats.ranks (mamnt_srs, RankDefinition.First)
+      |> Series.mapValues (fun fv -> int fv)
+    addCol "ranking" rank_srs)
+|> sortRows "ranking"
+|> take 10
