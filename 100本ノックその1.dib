@@ -4,9 +4,9 @@
 
 #!fsharp
 
-#r "nuget:Deedle,2.5.0"
-#r "nuget:Deedle.Math,2.5.0"
-#r "nuget:FSharp.Charting,2.1.0"
+#r "nuget:Deedle"
+#r "nuget:Deedle.Math"
+#r "nuget:FSharp.Charting"
 #i "nuget:https://www.myget.org/F/gregs-experimental-packages/api/v3/index.json"
 #r "nuget:Deedle.DotNet.Interactive.Extension,0.1.0-alpha8"
 open System

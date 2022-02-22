@@ -9,6 +9,7 @@
 #r "nuget:FSharp.Charting,2.1.0"
 #i "nuget:https://www.myget.org/F/gregs-experimental-packages/api/v3/index.json"
 #r "nuget:Deedle.DotNet.Interactive.Extension,0.1.0-alpha8"
+#load "importColumnFromForeignFrame.fs"
 open System
 open Deedle
 open Deedle.Frame
@@ -18,6 +19,7 @@ open Deedle.``F# Frame extensions``
 open System.Text.RegularExpressions
 open System.Linq
 open System.Collections.Generic
+open MMDeedleExtension
 
 #!markdown
 
@@ -355,43 +357,14 @@ df_toBeMerged
 
 #!markdown
 
-この例のようにforeign keyに基づくjoinをしたいことは多いが、Deedleではいい方法がない。そこで、列一つだけをforeign keyに基づいて追加する汎用関数を作った。以下の関数では、indexed_frameのキーがprimary_frameのkey_columnにあるという前提。追加する列はindexed_frameのcolumn_to_be_copiedを用いて構築する。データ型は型変数で指定する。indexed_frameをキーで参照しても値が見つからないときはmissingValueを用いる。
-
-#!fsharp
-
-//helper function
-
-let mergeColumnFromForeignFrame<'X, 'C, 'R1, 'R2 
-              when 'C: equality and 'R1: equality and 'R2: equality>
-   (column_to_be_copied: 'C) (missingValue: 'X) (indexed_frame: Frame<'R2,'C>)
-   (key_column: 'C) (primary_frame: Frame<'R1,'C>)   =
-
-  let srs_references: Series<'R1, 'R2> = 
-      primary_frame |> getCol key_column
-
-  let (srs_cols_to_be_merged: Series<_,'X>) = 
-    getCol column_to_be_copied indexed_frame
-
-  let new_srs = 
-    srs_references 
-    |> Series.mapValues 
-        (fun x -> if srs_cols_to_be_merged.ContainsKey(x) then
-                    srs_cols_to_be_merged.[x]
-                  else missingValue )
-
-  addCol column_to_be_copied new_srs primary_frame
-  
-
-#!markdown
-
-mergeColumnFromForeignFrameを使えば短く書ける。
+この例のようにforeign keyに基づくjoinをしたいことは多いが、Deedleではいい方法がない。そこで、列一つだけをforeign keyに基づいて追加する汎用関数importColumnFromForeignFrameを作った。これを使えば短く書ける。
 
 #!fsharp
 
 //Final solution
 let df_indexed_store =  df_store |> Frame.indexRowsString "store_cd" in 
 df_receipt
-|> mergeColumnFromForeignFrame<string,_,_,_>  "store_name" "" df_indexed_store "store_cd" 
+|> importColumnFromForeignFrame<string,_,_,_>  "store_name" "" df_indexed_store "store_cd" 
 |> filterRowsBy "store_cd" "S14006"
 |> take 10
 
@@ -429,14 +402,17 @@ df_product
 
 #!markdown
 
-mergeColumnFromForeignFrameを使うとずっと楽になる。
+importColumnFromForeignFrameを使うとずっと楽になる。
 
 #!fsharp
 
 //final solution
 
-let df_indexed_category =  df_category |> Frame.indexRowsString "category_small_cd" in df_product
-|> mergeColumnFromForeignFrame<string,_,_,_>  "category_small_name" "" df_indexed_category "category_small_cd" 
+let df_indexed_category = 
+  df_category 
+  |> Frame.indexRowsString "category_small_cd" in df_product
+  |> importColumnFromForeignFrame<string,_,_,_> 
+     "category_small_name" "" df_indexed_category "category_small_cd" 
 
 #!markdown
 
@@ -480,7 +456,7 @@ result
 
 #!markdown
 
-mergeColumnFromForeignFrameを使うとずっと楽になる。
+importColumnFromForeignFrameを使うとずっと楽になる。
 
 #!fsharp
 
@@ -495,7 +471,8 @@ let df_member_receipt =
 df_customer
 |> filterRowsBy "gender_cd" 1
 |> sliceCols ["customer_id"]
-|> mergeColumnFromForeignFrame<float,_,_,_>  "amount" 0.0 df_member_receipt "customer_id" 
+|> importColumnFromForeignFrame<float,_,_,_> 
+     "amount" 0.0 df_member_receipt "customer_id" 
 
 #!markdown
 
