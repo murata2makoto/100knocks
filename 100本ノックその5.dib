@@ -132,9 +132,11 @@ P-084
 
 顧客データフレーム（df_customer）の全顧客に対し、全期間の売上金額に占める2019年売上金額の割合を計算せよ。ただし、販売実績のない場合は0として扱うこと。そして計算した割合が0超のものを抽出せよ。 結果は10件表示させれば良い。また、作成したデータにNAやNANが存在しないことを確認せよ。
 
-#!fsharp
+#!markdown
 
-//二つのフレームを作って別々にaggregateしてからjoinする。
+二つのフレームを作って別々にaggregateしてからjoinする方法
+
+#!fsharp
 
 let df_amount_amount_2019_rate = 
         let df_receipt_for_real_customer =
@@ -164,9 +166,11 @@ df_amount_amount_2019_rate
 |> filterRowValues (fun os ->  os.GetAs<float>( "amount_rate") > 0.0)
 |> take 10
 
-#!fsharp
+#!markdown
 
-//amount_2019というcolumnを足してから一度だけaggregateする
+amount_2019というcolumnを足してから一度だけaggregateする方法
+
+#!fsharp
 
 let df_amount_amount_2019_rate = 
 
@@ -224,13 +228,15 @@ let df = Frame.ofValues (seq {(1,'a', 9); (2,'b', 3)})
 let srs = df.['a']
 srs.[1]
 
-Series.tryMap 
-
 #!markdown
 
 P-086
 
 前設問で作成した緯度経度つき顧客データフレーム（df_customer_1）に対し、申込み店舗コード（application_store_cd）をキーに店舗データフレーム（df_store）と結合せよ。そして申込み店舗の緯度（latitude）・経度情報（longitude)と顧客の緯度・経度を用いて距離（km）を求め、顧客ID（customer_id）、顧客住所（address）、店舗住所（address）とともに表示せよ。計算式は簡易式で良いものとするが、その他精度の高い方式を利用したライブラリを利用してもかまわない。結果は10件表示すれば良い。
+
+#!markdown
+
+まず結合まで行う。importThreeColumnsFromForeignFrameを使って三つのカラムを取り込んでいる。
 
 #!fsharp
 
@@ -262,12 +268,11 @@ let df_customer_1_with_df_store_added =
         "store_latitude"  0.0 
         df_store_indexed_by_cd "application_store_cd"   
 
-let srs_dist = 
-    df_customer_1_with_df_store_added 
-    |> mapRowValues 
-        (fun os -> (mkGeo os "latitude" "longitude",
-                    mkGeo os "store_latitude" "store_longitude")
-                   ||> geocDistance)
+#!markdown
+
+各行に対して、距離を計算して追加していく方法。
+
+#!fsharp
 
 df_customer_1_with_df_store_added
 |> Frame.rows
@@ -279,7 +284,25 @@ df_customer_1_with_df_store_added
                 (series ["distance" => geocDistance x y]))
 |> Frame.ofRows
 |> sliceCols ["customer_id"; "address"; "store_address";"distance"]
-|> filterRowsBy  "customer_id" "CS021412000147"
+|> take 10
+
+#!markdown
+
+新たなカラムをSeriesとして作り、カラムとして取り込む方法。
+
+#!fsharp
+
+let srs_dist = 
+    df_customer_1_with_df_store_added 
+    |> mapRowValues 
+        (fun os -> (mkGeo os "latitude" "longitude",
+                    mkGeo os "store_latitude" "store_longitude")
+                   ||> geocDistance)
+
+df_customer_1_with_df_store_added
+|> addCol "distance" srs_dist
+|> sliceCols ["customer_id"; "address"; "store_address";"distance"]
+|> take 10
 
 #!markdown
 
@@ -287,19 +310,19 @@ P-087
 
 顧客データフレーム（df_customer）では、異なる店舗での申込みなどにより同一顧客が複数登録されている。名前（customer_name）と郵便番号（postal_cd）が同じ顧客は同一顧客とみなし、1顧客1レコードとなるように名寄せした名寄顧客データフレーム（df_customer_u）を作成せよ。ただし、同一顧客に対しては売上金額合計が最も高いものを残すものとし、売上金額合計が同一もしくは売上実績の無い顧客については顧客ID（customer_id）の番号が小さいものを残すこととする。
 
+#!markdown
+
+まず、実際に同一顧客が登録されている例を見てみる。
+
 #!fsharp
 
-//Frame.aggregateRowsBy ["customer_name"; "postal_cd"] ["address"] (fun x -> x.Values |> List.ofSeq |> List.length ) df_customer
-//|> filterRows (fun k os -> os.GetAs<int>("address") > 1)
 df_customer
 |> filterRowsBy "customer_name" "久野 みゆき"
 
 #!fsharp
 
-df_receipt
-        |> filterRows (fun _ os -> os.GetAs<string>("customer_id").StartsWith("Z") |> not)
-        |> aggregateRowsBy ["customer_id"] ["amount"] Stats.sum
-        |> indexRowsString "customer_id"
+df_customer 
+|> filterRowsBy "customer_name" "黒崎 彩"
 
 #!fsharp
 
@@ -328,7 +351,9 @@ let df_amount_per_customer =
         |> indexRowsString "customer_id"
 
 let df_customer_with_amount_per_customer_added = 
-    importColumnFromForeignFrame<float,_,_,_> "amount"  0.0 df_amount_per_customer "customer_id" df_customer
+    importColumnFromForeignFrame<float,_,_,_> 
+        "amount"  0.0 
+        df_amount_per_customer "customer_id" df_customer
 
 let df_customer_u = 
     df_customer_with_amount_per_customer_added
@@ -339,12 +364,18 @@ let df_customer_u =
     |> Series.map getFirstByAmountThenCustomerId3
     |> Frame.ofRows
 
+#!markdown
+
+うまく行っていることを確認する
+
+#!fsharp
+
 df_customer_u
 |> filterRowsBy "customer_name" "久野 みゆき"
 
 #!fsharp
 
-df_customer 
+df_customer_u 
 |> filterRowsBy "customer_name" "黒崎 彩"
 
 #!markdown
@@ -510,7 +541,7 @@ let df_gender1 =
     |> groupRowsByString "gender"
     |> nest
     |> Series.mapValues (fun v -> (v.GetColumn("gender_cd"): Series<_, int>))
-    |> Series.mapValues (fun srs -> srs.ValuesAll |> Set.ofSeq)
+    |> Series.mapValues (fun srs -> srs.ValuesAll |> Set.ofSeq |> Set.toSeq |> Seq.head)
     
 let df_customer_s =
     df_customer
