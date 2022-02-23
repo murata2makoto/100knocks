@@ -36,8 +36,8 @@ let df_geocode = Frame.ReadCsv ("n:/home/makoto/100knocks-preprocess/docker/work
 
 問題1
 
-レシート明細データフレーム（df_receipt）から全項⽬の先頭10件を表⽰し、どのような
-データを保有しているか⽬視で確認せよ。
+レシート明細データフレーム（df_receipt）から全項目の先頭10件を表示し、どのような
+データを保有しているか目視で確認せよ。
 
 #!fsharp
 
@@ -52,9 +52,9 @@ df_receipt
 
 問題2
 
-レシート明細データフレーム（df_receipt）から売上⽇（sales_ymd）、顧客ID
-（customer_id）、商品コード（product_cd）、売上⾦額（amount）の順に列を指定し、
-10件表⽰させよ。
+レシート明細データフレーム（df_receipt）から売上日（sales_ymd）、顧客ID
+（customer_id）、商品コード（product_cd）、売上金額（amount）の順に列を指定し、
+10件表示させよ。
 
 #!fsharp
 
@@ -70,9 +70,7 @@ df_receipt
 
 問題3
 
-レシート明細データフレーム（df_receipt）から売上⽇（sales_ymd）、顧客ID
-（customer_id）、商品コード（product_cd）、売上⾦額（amount）の順に列を指定し、
-10件表⽰させよ。ただし、sales_ymdはsales_dateに項⽬名を変更しながら抽出するこ
+レシート明細データフレーム（df_receipt）から売上日（sales_ymd）、顧客ID（customer_id）、商品コード（product_cd）、売上金額（amount）の順に列を指定し、10件表示させよ。ただし、sales_ymdはsales_dateに項目名を変更しながら抽出するこ
 と。
 
 #!fsharp
@@ -97,8 +95,8 @@ df_receipt
 
 問題4
 
-レシート明細データフレーム（df_receipt）から売上⽇（sales_ymd）、顧客ID
-（customer_id）、商品コード（product_cd）、売上⾦額（amount）の順に列を指定し、
+レシート明細データフレーム（df_receipt）から売上日（sales_ymd）、顧客ID
+（customer_id）、商品コード（product_cd）、売上金額（amount）の順に列を指定し、
 以下の条件を満たすデータを抽出せよ。
 - 顧客ID（customer_id）が"CS018205000001"
 
@@ -123,11 +121,11 @@ df_receipt
 
 問題5
 
-レシート明細データフレーム（df_receipt）から売上⽇（sales_ymd）、顧客ID
-（customer_id）、商品コード（product_cd）、売上⾦額（amount）の順に列を指定し、
+レシート明細データフレーム（df_receipt）から売上日（sales_ymd）、顧客ID
+（customer_id）、商品コード（product_cd）、売上金額（amount）の順に列を指定し、
 以下の条件を満たすデータを抽出せよ。
 - 顧客ID（customer_id）が"CS018205000001"
-- 売上⾦額（amount）が1,000以上
+- 売上金額（amount）が1,000以上
 
 #!fsharp
 
@@ -144,11 +142,11 @@ df_receipt.Columns.[ ["sales_ymd"; "customer_id";  "product_cd"; "amount"] ]
 
 問題6
 
-レシート明細データフレーム（df_receipt）から売上⽇（sales_ymd）、顧客ID
-（customer_id）、商品コード（product_cd）、売上数量（quantity）、売上⾦額
+レシート明細データフレーム（df_receipt）から売上日（sales_ymd）、顧客ID
+（customer_id）、商品コード（product_cd）、売上数量（quantity）、売上金額
 （amount）の順に列を指定し、以下の条件を満たすデータを抽出せよ。
 - 顧客ID（customer_id）が"CS018205000001"
-- 売上⾦額（amount）が1,000以上または売上数量（quantity）が5以上
+- 売上金額（amount）が1,000以上または売上数量（quantity）が5以上
 
 #!fsharp
 
@@ -161,11 +159,11 @@ df_receipt
 
 問題7
 
-レシート明細データフレーム（df_receipt）から売上⽇（sales_ymd）、顧客ID
-（customer_id）、商品コード（product_cd）、売上⾦額（amount）の順に列を指定し、
+レシート明細データフレーム（df_receipt）から売上日（sales_ymd）、顧客ID
+（customer_id）、商品コード（product_cd）、売上金額（amount）の順に列を指定し、
 以下の条件を満たすデータを抽出せよ。
 - 顧客ID（customer_id）が"CS018205000001"
-- 売上⾦額（amount）が1,000以上2,000以下
+- 売上金額（amount）が1,000以上2,000以下
 
 #!fsharp
 
@@ -188,8 +186,8 @@ df_receipt
 
 問題8
 
-レシート明細データフレーム（df_receipt）から売上⽇（sales_ymd）、顧客ID
-（customer_id）、商品コード（product_cd）、売上⾦額（amount）の順に列を指定し、
+レシート明細データフレーム（df_receipt）から売上日（sales_ymd）、顧客ID
+（customer_id）、商品コード（product_cd）、売上金額（amount）の順に列を指定し、
 以下の条件を満たすデータを抽出せよ。
 - 顧客ID（customer_id）が"CS018205000001"
 - 商品コード（product_cd）が"P071401019"以外
@@ -231,7 +229,7 @@ df_store
 問題10
 
 店舗データフレーム（df_store）から、店舗コード（store_cd）が"S14"で始まるものだけ
-全項⽬抽出し、10件だけ表⽰せよ。
+全項目抽出し、10件だけ表示せよ。
 
 #!fsharp
 
@@ -243,7 +241,7 @@ df_store
 
 問題11
 
-顧客データフレーム（df_customer）から顧客ID（customer_id）の末尾が1のものだけ全項⽬抽出し、10件だけ表⽰せよ。
+顧客データフレーム（df_customer）から顧客ID（customer_id）の末尾が1のものだけ全項目抽出し、10件だけ表示せよ。
 
 #!fsharp
 
@@ -255,7 +253,7 @@ df_customer
 
 問題12
 
-店舗データフレーム（df_store）から横浜市の店舗だけ全項⽬表⽰せよ。
+店舗データフレーム（df_store）から横浜市の店舗だけ全項目表示せよ。
 
 #!fsharp
 
@@ -266,7 +264,7 @@ df_store
 
 問題13
 
-顧客データフレーム（df_customer）から、ステータスコード（status_cd）の先頭がアルファベットのA〜Fで始まるデータを全項⽬抽出し、10件だけ表⽰せよ。
+顧客データフレーム（df_customer）から、ステータスコード（status_cd）の先頭がアルファベットのA〜Fで始まるデータを全項目抽出し、10件だけ表示せよ。
 
 #!fsharp
 
@@ -280,7 +278,7 @@ df_customer
 問題14
 
 顧客データフレーム（df_customer）から、ステータスコード（status_cd）の末尾が数字
-の1〜9で終わるデータを全項⽬抽出し、10件だけ表⽰せよ。
+の1〜9で終わるデータを全項目抽出し、10件だけ表示せよ。
 
 #!fsharp
 
@@ -294,8 +292,8 @@ df_customer
 問題15
 
 顧客データフレーム（df_customer）から、ステータスコード（status_cd）の先頭がアル
-ファベットのA〜Fで始まり、末尾が数字の1〜9で終わるデータを全項⽬抽出し、10件だ
-け表⽰せよ。
+ファベットのA〜Fで始まり、末尾が数字の1〜9で終わるデータを全項目抽出し、10件だ
+け表示せよ。
 
 #!fsharp
 
@@ -308,7 +306,7 @@ df_customer
 
 問題16
 
-店舗データフレーム（df_store）から、電話番号（tel_no）が3桁-3桁-4桁のデータを全項⽬表⽰せよ。
+店舗データフレーム（df_store）から、電話番号（tel_no）が3桁-3桁-4桁のデータを全項目表示せよ。
 
 #!fsharp
 
@@ -320,7 +318,7 @@ df_store
 
 問題17
 
-顧客データフレーム（df_customer）を⽣年⽉⽇（birth_day）で⾼齢順にソートし、先頭10件を全項⽬表⽰せよ
+顧客データフレーム（df_customer）を生年月日（birth_day）で年齢順にソートし、先頭10件を全項目表示せよ
 
 #!fsharp
 
@@ -332,7 +330,7 @@ df_customer
 
 問題18
 
-顧客データフレーム（df_customer）を生年月日（birth_day）で若い順にソートし、先頭10件を全項⽬表⽰せよ。
+顧客データフレーム（df_customer）を生年月日（birth_day）で若い順にソートし、先頭10件を全項目表示せよ。
 
 #!fsharp
 
